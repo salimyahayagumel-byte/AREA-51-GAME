@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+           content="width=device-width, initial-scale=1.0,
+                    maximum-scale=1.0, user-scalable=no">
+
+    <title>AREA 51 GAME</title>
+
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+<div class="game">
+
+    <!-- TOP BAR -->
+    <header class="topbar">
+
+        <div class="brand">
+            👽 AREA 51
+        </div>
+
+        <div class="stats">
+            <div>💰 <span id="coins">100</span></div>
+            <div>⚡ <span id="energy">100</span></div>
+        </div>
+
+    </header>
+
+
+    <!-- PLAYER -->
+    <section class="player-card">
+
+        <div class="avatar">
+            👽
+        </div>
+
+        <div>
+            <h2 id="playerName">AGENT</h2>
+            <p>LEVEL <span id="level">1</span></p>
+        </div>
+
+    </section>
+
+
+    <!-- ENERGY -->
+    <section class="energy-box">
+
+        <div class="energy-title">
+            <span>⚡ ENERGY</span>
+            <span id="energyText">100 / 100</span>
+        </div>
+
+        <div class="energy-bar">
+            <div id="energyFill"></div>
+        </div>
+
+    </section>
+
+
+    <!-- MAIN AREA -->
+    <main>
+
+        <div id="homeScreen" class="screen active">
+
+            <div class="ufo">
+                🛸
+            </div>
+
+            <h1>AREA 51</h1>
+
+            <p class="subtitle">
+                SECRET AGENT OPERATIONS
+            </p>
+
+            <div class="menu">
+
+                <button onclick="showScreen('missionScreen')">
+                    🎯
+                    <span>MISSIONS</span>
+                </button>
+
+                <button onclick="showScreen('gamesScreen')">
+                    🎰
+                    <span>MINI GAMES</span>
+                </button>
+
+                <button onclick="showScreen('dailyScreen')">
+                    🎁
+                    <span>DAILY REWARD</span>
+                </button>
+
+                <button onclick="showScreen('leaderboardScreen')">
+                    🏆
+                    <span>LEADERBOARD</span>
+                </button>
+
+            </div>
+
+        </div>
+
+
+        <!-- MISSION -->
+        <div id="missionScreen" class="screen">
+
+            <button class="back" onclick="showScreen('homeScreen')">
+                ← BACK
+            </button>
+
+            <h2>🎯 SECRET MISSION</h2>
+
+            <div class="mission-card">
+
+                <div class="mission-icon">
+                    🪖
+                </div>
+
+                <h3>AREA 51 OPERATION</h3>
+
+                <p>
+                    Complete the secret mission
+                    and earn coins.
+                </p>
+
+                <p>
+                    Reward: 💰 +20–80
+                </p>
+
+                <button class="action" onclick="mission()">
+                    🚀 START MISSION
+                </button>
+
+            </div>
+
+        </div>
+
+
+        <!-- GAMES -->
+        <div id="gamesScreen" class="screen">
+
+            <button class="back" onclick="showScreen('homeScreen')">
+                ← BACK
+            </button>
+
+            <h2>🎮 MINI GAMES</h2>
+
+            <div class="game-buttons">
+
+                <button class="big-game" onclick="showScreen('slotScreen')">
+                    🎰
+                    <strong>SLOT</strong>
+                    <small>20 COINS</small>
+                </button>
+
+                <button class="big-game" onclick="showScreen('diceScreen')">
+                    🎲
+                    <strong>DICE</strong>
+                    <small>20 COINS</small>
+                </button>
+
+            </div>
+
+        </div>
+
+
+        <!-- SLOT -->
+        <div id="slotScreen" class="screen">
+
+            <button class="back" onclick="showScreen('gamesScreen')">
+                ← BACK
+            </button>
+
+            <h2>🎰 AREA 51 SLOT</h2>
+
+            <div class="slot-machine">
+
+                <div id="slot1">👽</div>
+                <div id="slot2">🛸</div>
+                <div id="slot3">💎</div>
+
+            </div>
+
+            <p id="slotResult">
+                SPIN THE MACHINE
+            </p>
+
+            <button class="action" onclick="spinSlot()">
+                🎰 SPIN — 20 COINS
+            </button>
+
+        </div>
+
+
+        <!-- DICE -->
+        <div id="diceScreen" class="screen">
+
+            <button class="back" onclick="showScreen('gamesScreen')">
+                ← BACK
+            </button>
+
+            <h2>🎲 LUCKY DICE</h2>
+
+            <div id="dice" class="dice">
+                🎲
+            </div>
+
+            <p id="diceResult">
+                ROLL THE DICE
+            </p>
+
+            <button class="action" onclick="rollDice()">
+                🎲 ROLL — 20 COINS
+            </button>
+
+        </div>
+
+
+        <!-- DAILY -->
+        <div id="dailyScreen" class="screen">
+
+            <button class="back" onclick="showScreen('homeScreen')">
+                ← BACK
+            </button>
+
+            <h2>🎁 DAILY REWARD</h2>
+
+            <div class="reward">
+
+                <div class="reward-icon">
+                    🎁
+                </div>
+
+                <h3>AGENT DAILY BONUS</h3>
+
+                <p>
+                    Claim your daily coins.
+                </p>
+
+                <button class="action" onclick="dailyReward()">
+                    🎁 CLAIM +100
+                </button>
+
+            </div>
+
+        </div>
+
+
+        <!-- LEADERBOARD -->
+        <div id="leaderboardScreen" class="screen">
+
+            <button class="back" onclick="showScreen('homeScreen')">
+                ← BACK
+            </button>
+
+            <h2>🏆 TOP AGENTS</h2>
+
+            <div class="leaderboard">
+
+                <div>🥇 AGENT ZERO <b>12,500</b></div>
+                <div>🥈 SHADOW X <b>10,850</b></div>
+                <div>🥉 UFO HUNTER <b>9,420</b></div>
+                <div>4️⃣ NIGHT AGENT <b>8,900</b></div>
+                <div>5️⃣ AREA COMMANDER <b>7,650</b></div>
+
+            </div>
+
+        </div>
+
+    </main>
+
+</div>
+
+<script src="game.js"></script>
+
+</body>
+</html>

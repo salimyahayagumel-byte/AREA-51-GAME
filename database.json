@@ -1,0 +1,20 @@
+{
+  "players": {
+    "7087143397": {
+      "name": "Salim",
+      "coins": 62,
+      "energy": 80,
+      "max_energy": 100,
+      "level": 1,
+      "wins": 0,
+      "missions": 1,
+      "daily_claimed": "",
+      "clan": "None",
+      "xp": 0,
+      "games": 0,
+      "referrals": 0,
+      "vip": 0,
+      "last_daily": ""
+    }
+  }
+}
