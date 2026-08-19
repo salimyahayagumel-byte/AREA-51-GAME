@@ -4,6 +4,7 @@ import random
 import logging
 import threading
 from datetime import datetime, date
+
 from flask import Flask, send_from_directory, jsonify, request
 
 from telegram import (
@@ -19,33 +20,35 @@ from telegram.ext import (
     ContextTypes,
 )
 
+
 # =========================================================
-# AREA 51 GAME V3
-# Telegram Bot + Flask + Telegram Mini App
+# 👽 AREA 51 GAME V4
+# Telegram Bot + Flask Web Game
 # =========================================================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 
 PORT = int(os.getenv("PORT", "8080"))
 
-# Render URL za a saka ta environment variable.
-# Example:
-# https://area51-game.onrender.com
 GAME_URL = os.getenv(
     "GAME_URL",
-    "https://YOUR-RENDER-URL.onrender.com"
+    "https://area-51-game.onrender.com"
 ).strip().rstrip("/")
 
-DB_FILE = "database.json"
+DB_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "database.json"
+)
 
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     level=logging.INFO,
 )
 
 logger = logging.getLogger("AREA51")
 
 db_lock = threading.Lock()
+
 
 # =========================================================
 # FLASK WEB APP
@@ -60,170 +63,167 @@ web_app = Flask(
 
 @web_app.route("/")
 def home():
-    return send_from_directory("web", "index.html")
+    return send_from_directory(
+        os.path.join(web_app.root_path, "web"),
+        "index.html"
+    )
 
 
 @web_app.route("/<path:filename>")
 def static_files(filename):
-    return send_from_directory("web", filename)
+    return send_from_directory(
+        os.path.join(web_app.root_path, "web"),
+        filename
+    )
+
+
+@web_app.route("/health")
+def health():
+    return jsonify({
+        "status": "ok",
+        "game": "AREA 51",
+        "version": "V4"
+    })
 
 
 # =========================================================
 # DATABASE
 # =========================================================
 
-def default_database():
-    return {
-        "players": {}
-    }
-
-
 def load_db():
     with db_lock:
-        if not os.path.exists(DB_FILE):
-            return default_database()
-
         try:
+            if not os.path.exists(DB_FILE):
+                return {}
+
             with open(DB_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
 
-            if "players" not in data:
-                data["players"] = {}
+                if not isinstance(data, dict):
+                    return {}
 
-            return data
+                return data
 
-        except Exception:
-            logger.exception("Database read error")
-            return default_database()
+        except Exception as e:
+            logger.error("Database read error: %s", e)
+            return {}
 
 
-def save_db(db):
+def save_db(data):
     with db_lock:
-        temp_file = DB_FILE + ".tmp"
+        try:
+            temp_file = DB_FILE + ".tmp"
 
-        with open(temp_file, "w", encoding="utf-8") as f:
-            json.dump(
-                db,
-                f,
-                ensure_ascii=False,
-                indent=2
-            )
+            with open(
+                temp_file,
+                "w",
+                encoding="utf-8"
+            ) as f:
+                json.dump(
+                    data,
+                    f,
+                    indent=2,
+                    ensure_ascii=False
+                )
 
-        os.replace(temp_file, DB_FILE)
+            os.replace(temp_file, DB_FILE)
+
+        except Exception as e:
+            logger.error("Database save error: %s", e)
 
 
 def create_player(user):
-    return {
-        "id": str(user.id),
-        "name": user.first_name or "Agent",
-        "username": user.username or "",
-        "coins": 100,
-        "energy": 100,
-        "max_energy": 100,
-        "level": 1,
-        "xp": 0,
-        "wins": 0,
-        "missions": 0,
-        "games": 0,
-        "referrals": 0,
-        "clan": "None",
-        "vip": 0,
-        "last_daily": "",
-        "created_at": datetime.utcnow().isoformat(),
-    }
-
-
-def get_or_create_player(user):
     db = load_db()
+
     uid = str(user.id)
 
-    if uid not in db["players"]:
-        db["players"][uid] = create_player(user)
+    if uid not in db:
+        db[uid] = {
+            "id": user.id,
+            "name": user.first_name or "Agent",
+            "username": user.username or "",
+            "coins": 100,
+            "energy": 100,
+            "max_energy": 100,
+            "level": 1,
+            "wins": 0,
+            "missions": 0,
+            "games": 0,
+            "daily": "",
+            "created": datetime.utcnow().isoformat(),
+        }
+
         save_db(db)
 
-    return db, db["players"][uid]
+    else:
+        changed = False
+
+        if user.first_name:
+            db[uid]["name"] = user.first_name
+            changed = True
+
+        if user.username:
+            db[uid]["username"] = user.username
+            changed = True
+
+        if changed:
+            save_db(db)
+
+    return db[uid]
 
 
-def normalize_player(p):
-    defaults = {
-        "coins": 100,
-        "energy": 100,
-        "max_energy": 100,
-        "level": 1,
-        "xp": 0,
-        "wins": 0,
-        "missions": 0,
-        "games": 0,
-        "referrals": 0,
-        "clan": "None",
-        "vip": 0,
-        "last_daily": "",
-    }
+def get_player(user_id):
+    db = load_db()
 
-    for key, value in defaults.items():
-        if key not in p:
-            p[key] = value
-
-    return p
+    return db.get(str(user_id))
 
 
-# =========================================================
-# GAME HELPERS
-# =========================================================
+def update_player(user_id, **changes):
+    db = load_db()
 
-def add_xp(player, amount):
-    player["xp"] += amount
+    uid = str(user_id)
 
-    leveled_up = False
+    if uid not in db:
+        return None
 
-    while player["xp"] >= player["level"] * 100:
-        player["xp"] -= player["level"] * 100
-        player["level"] += 1
-        leveled_up = True
-
-    return leveled_up
-
-
-def recharge_energy(player):
-    if player["energy"] < player["max_energy"]:
-        player["energy"] = min(
-            player["max_energy"],
-            player["energy"] + 5
-        )
-
-
-def player_public(player):
-    return {
-        "id": player.get("id"),
-        "name": player.get("name", "Agent"),
-        "username": player.get("username", ""),
-        "coins": player.get("coins", 0),
-        "energy": player.get("energy", 0),
-        "max_energy": player.get("max_energy", 100),
-        "level": player.get("level", 1),
-        "xp": player.get("xp", 0),
-        "wins": player.get("wins", 0),
-        "missions": player.get("missions", 0),
-        "games": player.get("games", 0),
-        "referrals": player.get("referrals", 0),
-        "clan": player.get("clan", "None"),
-    }
-
-
-# =========================================================
-# TELEGRAM /START
-# =========================================================
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    user = update.effective_user
-
-    db, player = get_or_create_player(user)
-    normalize_player(player)
+    db[uid].update(changes)
 
     save_db(db)
 
-    keyboard = [
+    return db[uid]
+
+
+# =========================================================
+# PLAYER TEXT
+# =========================================================
+
+def player_text(player):
+    name = player.get("name", "Agent")
+
+    return (
+        "👽 *AREA 51 GAME*\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        f"👤 Player: *{name}*\n"
+        f"💰 Coins: *{player.get('coins', 0)}*\n"
+        f"⚡ Energy: *{player.get('energy', 0)}/"
+        f"{player.get('max_energy', 100)}*\n"
+        f"⭐ Level: *{player.get('level', 1)}*\n"
+        f"🏆 Wins: *{player.get('wins', 0)}*\n"
+        f"🎯 Missions: *{player.get('missions', 0)}*\n"
+        "🏰 Clan: *None*\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "\n"
+        "🔥 *AREA 51 GAME*\n"
+        "Zaɓi abin da kake son yi a ƙasa 👇"
+    )
+
+
+# =========================================================
+# MAIN KEYBOARD
+# =========================================================
+
+def main_keyboard():
+    return InlineKeyboardMarkup([
         [
             InlineKeyboardButton(
                 "🎮 PLAY FULLSCREEN GAME",
@@ -232,8 +232,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ],
         [
             InlineKeyboardButton(
-                "🎯 MISSION",
-                callback_data="mission"
+                "🎯 MISSIONS",
+                callback_data="missions"
             ),
             InlineKeyboardButton(
                 "🎰 MINI GAMES",
@@ -256,139 +256,110 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 callback_data="profile"
             )
         ]
-    ]
-
-    text = (
-        "👽 *AREA 51 GAME*\n\n"
-        f"Welcome, *{player['name']}*! 🚀\n\n"
-        "━━━━━━━━━━━━━━━━━━\n"
-        f"👤 Player: *{player['name']}*\n"
-        f"💰 Coins: `{player['coins']}`\n"
-        f"⚡ Energy: `{player['energy']}/{player['max_energy']}`\n"
-        f"⭐ Level: `{player['level']}`\n"
-        f"🏆 Wins: `{player['wins']}`\n"
-        f"🎯 Missions: `{player['missions']}`\n"
-        f"🏰 Clan: `{player['clan']}`\n"
-        "━━━━━━━━━━━━━━━━━━\n\n"
-        "🔥 *AREA 51 GAME*\n"
-        "Zaɓi abin da kake son yi a ƙasa 👇"
-    )
-
-    if update.message:
-        await update.message.reply_text(
-            text,
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="Markdown"
-        )
+    ])
 
 
 # =========================================================
-# PROFILE
+# /START
 # =========================================================
 
-async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def start(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
 
-    query = update.callback_query
-    await query.answer()
+    user = update.effective_user
 
-    db, player = get_or_create_player(query.from_user)
-
-    text = (
-        "👤 *YOUR AREA 51 PROFILE*\n\n"
-        f"👽 Agent: *{player['name']}*\n"
-        f"💰 Coins: `{player['coins']}`\n"
-        f"⚡ Energy: `{player['energy']}/{player['max_energy']}`\n"
-        f"⭐ Level: `{player['level']}`\n"
-        f"✨ XP: `{player['xp']}`\n"
-        f"🏆 Wins: `{player['wins']}`\n"
-        f"🎯 Missions: `{player['missions']}`\n"
-        f"🎮 Games: `{player['games']}`\n"
-        f"🏰 Clan: `{player['clan']}`"
-    )
-
-    keyboard = [
-        [
-            InlineKeyboardButton(
-                "⬅️ BACK",
-                callback_data="back"
-            )
-        ]
-    ]
-
-    await query.edit_message_text(
-        text,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="Markdown"
-    )
-
-
-# =========================================================
-# MISSION
-# =========================================================
-
-async def mission(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    query = update.callback_query
-    await query.answer()
-
-    db, player = get_or_create_player(query.from_user)
-
-    normalize_player(player)
-
-    if player["energy"] < 20:
-
-        await query.answer(
-            "❌ Ba ka da Energy. Jira kaɗan.",
-            show_alert=True
-        )
+    if not user:
         return
 
-    player["energy"] -= 20
+    player = create_player(user)
+
+    await update.message.reply_text(
+        player_text(player),
+        parse_mode="Markdown",
+        reply_markup=main_keyboard()
+    )
+
+
+# =========================================================
+# MISSIONS
+# =========================================================
+
+async def missions(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    query = update.callback_query
+
+    await query.answer()
+
+    user = query.from_user
+
+    player = create_player(user)
+
+    energy = player["energy"]
+
+    if energy < 20:
+
+        await query.edit_message_text(
+            "🎯 *MISSIONS*\n\n"
+            "❌ Ba ka da isasshen Energy.\n\n"
+            f"⚡ Energy: {energy}/100\n"
+            "Kana buƙatar akalla 20 Energy.",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton(
+                        "🔙 BACK",
+                        callback_data="back"
+                    )
+                ]
+            ])
+        )
+
+        return
 
     reward = random.randint(20, 60)
 
-    player["coins"] += reward
-    player["missions"] += 1
+    new_energy = energy - 20
+    new_coins = player["coins"] + reward
+    new_missions = player["missions"] + 1
 
-    xp = random.randint(10, 30)
-    level_up = add_xp(player, xp)
+    # Every 5 missions -> level up
+    new_level = 1 + (new_missions // 5)
 
-    save_db(db)
-
-    text = (
-        "🎯 *MISSION COMPLETE*\n\n"
-        "🪖 Agent mission successful!\n\n"
-        f"💰 Reward: `+{reward} Coins`\n"
-        f"✨ XP: `+{xp}`\n"
-        f"⚡ Energy: `{player['energy']}/{player['max_energy']}`\n"
-        f"🎯 Missions: `{player['missions']}`"
+    player = update_player(
+        user.id,
+        energy=new_energy,
+        coins=new_coins,
+        missions=new_missions,
+        level=new_level
     )
 
-    if level_up:
-        text += (
-            f"\n\n🎉 *LEVEL UP!*\n"
-            f"⭐ Sabon Level: `{player['level']}`"
-        )
-
-    keyboard = [
-        [
-            InlineKeyboardButton(
-                "🎯 MISSION AGAIN",
-                callback_data="mission"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "⬅️ BACK",
-                callback_data="back"
-            )
-        ]
-    ]
-
     await query.edit_message_text(
-        text,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="Markdown"
+        "🎯 *MISSION COMPLETE*\n\n"
+        "🪖 Agent mission successful!\n"
+        f"💰 Reward: *+{reward} Coins*\n"
+        f"⚡ Energy: *{new_energy}/100*\n"
+        f"🎯 Missions: *{new_missions}*\n"
+        f"⭐ Level: *{new_level}*",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(
+                    "🎯 ANOTHER MISSION",
+                    callback_data="missions"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "🔙 BACK",
+                    callback_data="back"
+                )
+            ]
+        ])
     )
 
 
@@ -396,212 +367,254 @@ async def mission(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # MINI GAMES MENU
 # =========================================================
 
-async def games(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def games(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
 
     query = update.callback_query
+
     await query.answer()
-
-    text = (
-        "🎰 *AREA 51 MINI GAMES*\n\n"
-        "Zaɓi wasan:"
-    )
-
-    keyboard = [
-        [
-            InlineKeyboardButton(
-                "🎰 SLOT GAME",
-                callback_data="slot"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "🎲 LUCKY DICE",
-                callback_data="dice"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "⬅️ BACK",
-                callback_data="back"
-            )
-        ]
-    ]
 
     await query.edit_message_text(
-        text,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="Markdown"
+        "🎰 *AREA 51 MINI GAME*\n\n"
+        "Zaɓi wasan:",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(
+                    "🎰 SLOT GAME",
+                    callback_data="slot"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "🎲 LUCKY DICE",
+                    callback_data="dice"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "🔙 BACK",
+                    callback_data="back"
+                )
+            ]
+        ])
     )
 
 
 # =========================================================
-# SLOT
+# SLOT GAME
 # =========================================================
 
-async def slot(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def slot(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
 
     query = update.callback_query
+
     await query.answer()
 
-    db, player = get_or_create_player(query.from_user)
+    user = query.from_user
 
-    COST = 20
+    player = create_player(user)
 
-    if player["coins"] < COST:
-        await query.answer(
-            "❌ Ba ka da Coins 20.",
-            show_alert=True
+    cost = 20
+
+    if player["coins"] < cost:
+
+        await query.edit_message_text(
+            "🎰 *SLOT*\n\n"
+            "❌ Ba ka da isasshen Coin.\n"
+            f"💰 Balance: {player['coins']}",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton(
+                        "🔙 BACK",
+                        callback_data="games"
+                    )
+                ]
+            ])
         )
+
         return
 
-    player["coins"] -= COST
-    player["games"] += 1
-
-    symbols = ["💰", "🚀", "👽", "⭐", "💎"]
+    symbols = [
+        "👽",
+        "🛸",
+        "💎",
+        "💰",
+        "⭐",
+        "🚀"
+    ]
 
     a = random.choice(symbols)
     b = random.choice(symbols)
     c = random.choice(symbols)
 
+    result = f"{a} | {b} | {c}"
+
+    coins = player["coins"] - cost
+
+    win = False
     reward = 0
-    won = False
 
     if a == b == c:
-        reward = 150
-        won = True
-
+        win = True
+        reward = 100
     elif a == b or b == c or a == c:
+        win = True
         reward = 40
-        won = True
 
-    if won:
-        player["coins"] += reward
-        player["wins"] += 1
-        add_xp(player, 20)
+    if win:
+        coins += reward
 
-    save_db(db)
-
-    if won:
-        result = (
-            "🎉 *YOU WIN!*\n\n"
-            f"🎰 `{a} | {b} | {c}`\n\n"
-            f"💰 Reward: `+{reward}`\n"
-            f"💰 Balance: `{player['coins']}`"
+        player = update_player(
+            user.id,
+            coins=coins,
+            wins=player["wins"] + 1,
+            games=player["games"] + 1
         )
-    else:
-        result = (
+
+        message = (
             "🎰 *SLOT*\n\n"
-            f"`{a} | {b} | {c}`\n\n"
-            "❌ Ba ka ci wannan karon.\n"
-            f"💰 Balance: `{player['coins']}`"
+            f"🎰 {result}\n\n"
+            "🎉 *YOU WIN!*\n"
+            f"💰 Reward: *+{reward}*\n"
+            f"💰 Balance: *{coins}*"
         )
 
-    keyboard = [
-        [
-            InlineKeyboardButton(
-                "🎰 SPIN AGAIN - 20",
-                callback_data="slot"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "⬅️ BACK",
-                callback_data="games"
-            )
-        ]
-    ]
+    else:
+
+        player = update_player(
+            user.id,
+            coins=coins,
+            games=player["games"] + 1
+        )
+
+        message = (
+            "🎰 *SLOT*\n\n"
+            f"🎰 {result}\n\n"
+            "❌ Ba ka ci wannan karon.\n"
+            f"💰 Balance: *{coins}*"
+        )
 
     await query.edit_message_text(
-        result,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="Markdown"
+        message,
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(
+                    "🎰 SPIN AGAIN",
+                    callback_data="slot"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "🔙 MINI GAMES",
+                    callback_data="games"
+                )
+            ]
+        ])
     )
 
 
 # =========================================================
-# DICE
+# DICE GAME
 # =========================================================
 
-async def dice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def dice(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
 
     query = update.callback_query
+
     await query.answer()
 
-    db, player = get_or_create_player(query.from_user)
+    user = query.from_user
 
-    COST = 20
+    player = create_player(user)
 
-    if player["coins"] < COST:
-        await query.answer(
-            "❌ Ba ka da Coins 20.",
-            show_alert=True
+    cost = 20
+
+    if player["coins"] < cost:
+
+        await query.edit_message_text(
+            "🎲 *DICE*\n\n"
+            "❌ Ba ka da isasshen Coin.\n"
+            f"💰 Balance: {player['coins']}",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton(
+                        "🔙 BACK",
+                        callback_data="games"
+                    )
+                ]
+            ])
         )
-        return
 
-    player["coins"] -= COST
-    player["games"] += 1
+        return
 
     number = random.randint(1, 6)
 
-    if number == 6:
+    coins = player["coins"] - cost
 
-        reward = 100
-        player["coins"] += reward
-        player["wins"] += 1
-        add_xp(player, 20)
+    if number in [5, 6]:
 
-        result = (
-            "🎲 *DICE JACKPOT!*\n\n"
-            f"Number: `{number}`\n"
-            "🎉 Ka ci!\n\n"
-            f"💰 Reward: `+{reward}`\n"
-            f"💰 Balance: `{player['coins']}`"
+        reward = 60
+        coins += reward
+
+        player = update_player(
+            user.id,
+            coins=coins,
+            wins=player["wins"] + 1,
+            games=player["games"] + 1
         )
 
-    elif number >= 4:
-
-        reward = 40
-        player["coins"] += reward
-        player["wins"] += 1
-        add_xp(player, 10)
-
-        result = (
-            "🎲 *DICE WIN!*\n\n"
-            f"Number: `{number}`\n"
-            f"💰 Reward: `+{reward}`\n"
-            f"💰 Balance: `{player['coins']}`"
+        message = (
+            "🎲 *DICE*\n\n"
+            f"Number: *{number}*\n\n"
+            "🎉 *Ka yi nasara!*\n"
+            f"💰 Reward: *+{reward}*\n"
+            f"💰 Balance: *{coins}*"
         )
 
     else:
 
-        result = (
-            "🎲 *DICE*\n\n"
-            f"Number: `{number}`\n"
-            "❌ Ka yi rashin sa'a.\n"
-            f"💰 Balance: `{player['coins']}`"
+        player = update_player(
+            user.id,
+            coins=coins,
+            games=player["games"] + 1
         )
 
-    save_db(db)
-
-    keyboard = [
-        [
-            InlineKeyboardButton(
-                "🎲 ROLL AGAIN - 20",
-                callback_data="dice"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "⬅️ BACK",
-                callback_data="games"
-            )
-        ]
-    ]
+        message = (
+            "🎲 *DICE*\n\n"
+            f"Number: *{number}*\n\n"
+            "❌ Ka yi rashin sa'a.\n"
+            f"💰 Balance: *{coins}*"
+        )
 
     await query.edit_message_text(
-        result,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="Markdown"
+        message,
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(
+                    "🎲 ROLL AGAIN",
+                    callback_data="dice"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "🔙 MINI GAMES",
+                    callback_data="games"
+                )
+            ]
+        ])
     )
 
 
@@ -609,54 +622,103 @@ async def dice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # DAILY REWARD
 # =========================================================
 
-async def daily(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def daily(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
 
     query = update.callback_query
+
     await query.answer()
 
-    db, player = get_or_create_player(query.from_user)
+    user = query.from_user
+
+    player = create_player(user)
 
     today = date.today().isoformat()
 
-    if player.get("last_daily") == today:
+    if player.get("daily") == today:
 
-        text = (
+        await query.edit_message_text(
             "🎁 *DAILY REWARD*\n\n"
-            "❌ Ka riga ka karɓi reward ɗinka yau.\n\n"
-            "⏰ Ka dawo gobe."
+            "❌ Ka riga ka karɓi reward na yau.\n\n"
+            "⏰ Ka dawo gobe.",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton(
+                        "🔙 BACK",
+                        callback_data="back"
+                    )
+                ]
+            ])
         )
 
-    else:
+        return
 
-        reward = random.randint(50, 150)
+    reward = 50
 
-        player["coins"] += reward
-        player["last_daily"] = today
+    coins = player["coins"] + reward
 
-        add_xp(player, 10)
-
-        save_db(db)
-
-        text = (
-            "🎁 *DAILY REWARD CLAIMED!*\n\n"
-            f"💰 `+{reward} Coins`\n"
-            f"💰 Balance: `{player['coins']}`\n"
-            "✨ XP: `+10`"
-        )
-
-    keyboard = [
-        [
-            InlineKeyboardButton(
-                "⬅️ BACK",
-                callback_data="back"
-            )
-        ]
-    ]
+    player = update_player(
+        user.id,
+        coins=coins,
+        daily=today
+    )
 
     await query.edit_message_text(
-        text,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="Markdown"
+        "🎁 *DAILY REWARD*\n\n"
+        "🎉 An karɓi reward!\n\n"
+        f"💰 *+{reward} Coins*\n"
+        f"💰 Balance: *{coins}*",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(
+                    "🔙 BACK",
+                    callback_data="back"
+                )
+            ]
+        ])
+    )
+
+
+# =========================================================
+# PROFILE
+# =========================================================
+
+async def profile(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    query = update.callback_query
+
+    await query.answer()
+
+    player = create_player(query.from_user)
+
+    await query.edit_message_text(
+        "👤 *MY PROFILE*\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        f"👤 Name: *{player['name']}*\n"
+        f"💰 Coins: *{player['coins']}*\n"
+        f"⚡ Energy: *{player['energy']}/"
+        f"{player['max_energy']}*\n"
+        f"⭐ Level: *{player['level']}*\n"
+        f"🏆 Wins: *{player['wins']}*\n"
+        f"🎯 Missions: *{player['missions']}*\n"
+        f"🎰 Games: *{player['games']}*\n"
+        "━━━━━━━━━━━━━━━━━━",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(
+                    "🔙 BACK",
+                    callback_data="back"
+                )
+            ]
+        ])
     )
 
 
@@ -664,68 +726,68 @@ async def daily(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # LEADERBOARD
 # =========================================================
 
-async def leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def leaderboard(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
 
     query = update.callback_query
+
     await query.answer()
 
     db = load_db()
 
-    players = []
-
-    for player in db["players"].values():
-        normalize_player(player)
-        players.append(player)
+    players = list(db.values())
 
     players.sort(
-        key=lambda x: x.get("coins", 0),
+        key=lambda x: (
+            x.get("coins", 0),
+            x.get("wins", 0),
+            x.get("level", 1)
+        ),
         reverse=True
     )
 
     top = players[:10]
 
-    text = "🏆 *AREA 51 GLOBAL LEADERBOARD*\n\n"
+    text = "🏆 *AREA 51 LEADERBOARD*\n"
+    text += "━━━━━━━━━━━━━━━━━━\n\n"
 
     if not top:
         text += "Babu players tukuna."
-
     else:
 
-        medals = ["🥇", "🥈", "🥉"]
+        medals = [
+            "🥇",
+            "🥈",
+            "🥉"
+        ]
 
         for index, player in enumerate(top, start=1):
 
             medal = (
                 medals[index - 1]
                 if index <= 3
-                else f"`#{index}`"
+                else f"{index}."
             )
 
             text += (
-                f"{medal} "
-                f"*{player.get('name', 'Agent')}* — "
-                f"💰 `{player.get('coins', 0)}`\n"
+                f"{medal} *{player.get('name', 'Agent')}* "
+                f"— 💰 {player.get('coins', 0)} "
+                f"⭐ {player.get('level', 1)}\n"
             )
-
-    keyboard = [
-        [
-            InlineKeyboardButton(
-                "🔄 REFRESH",
-                callback_data="leaderboard"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "⬅️ BACK",
-                callback_data="back"
-            )
-        ]
-    ]
 
     await query.edit_message_text(
         text,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="Markdown"
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(
+                    "🔙 BACK",
+                    callback_data="back"
+                )
+            ]
+        ])
     )
 
 
@@ -733,67 +795,21 @@ async def leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # BACK
 # =========================================================
 
-async def back(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def back(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
 
     query = update.callback_query
+
     await query.answer()
 
-    user = query.from_user
-
-    db, player = get_or_create_player(user)
-
-    keyboard = [
-        [
-            InlineKeyboardButton(
-                "🎮 PLAY FULLSCREEN GAME",
-                web_app=WebAppInfo(url=GAME_URL)
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "🎯 MISSION",
-                callback_data="mission"
-            ),
-            InlineKeyboardButton(
-                "🎰 MINI GAMES",
-                callback_data="games"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "🎁 DAILY REWARD",
-                callback_data="daily"
-            ),
-            InlineKeyboardButton(
-                "🏆 LEADERBOARD",
-                callback_data="leaderboard"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "👤 MY PROFILE",
-                callback_data="profile"
-            )
-        ]
-    ]
-
-    text = (
-        "👽 *AREA 51 GAME*\n\n"
-        f"Welcome, *{player['name']}*! 🚀\n\n"
-        "━━━━━━━━━━━━━━━━━━\n"
-        f"💰 Coins: `{player['coins']}`\n"
-        f"⚡ Energy: `{player['energy']}/{player['max_energy']}`\n"
-        f"⭐ Level: `{player['level']}`\n"
-        f"🏆 Wins: `{player['wins']}`\n"
-        f"🎯 Missions: `{player['missions']}`\n"
-        "━━━━━━━━━━━━━━━━━━\n\n"
-        "🔥 Zaɓi abin da kake son yi:"
-    )
+    player = create_player(query.from_user)
 
     await query.edit_message_text(
-        text,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="Markdown"
+        player_text(player),
+        parse_mode="Markdown",
+        reply_markup=main_keyboard()
     )
 
 
@@ -801,260 +817,58 @@ async def back(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # CALLBACK ROUTER
 # =========================================================
 
-async def button_handler(
+async def callback_handler(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE
 ):
 
     query = update.callback_query
 
-    if query.data == "mission":
-        await mission(update, context)
+    data = query.data
 
-    elif query.data == "games":
+    if data == "missions":
+        await missions(update, context)
+
+    elif data == "games":
         await games(update, context)
 
-    elif query.data == "slot":
+    elif data == "slot":
         await slot(update, context)
 
-    elif query.data == "dice":
+    elif data == "dice":
         await dice(update, context)
 
-    elif query.data == "daily":
+    elif data == "daily":
         await daily(update, context)
 
-    elif query.data == "leaderboard":
+    elif data == "leaderboard":
         await leaderboard(update, context)
 
-    elif query.data == "profile":
+    elif data == "profile":
         await profile(update, context)
 
-    elif query.data == "back":
+    elif data == "back":
         await back(update, context)
 
     else:
-        await query.answer()
+        await query.answer("Unknown command")
 
 
 # =========================================================
 # WEB API
 # =========================================================
 
-@web_app.route("/api/health")
-def api_health():
+@web_app.route("/api/player/<int:user_id>")
+def api_player(user_id):
 
-    return jsonify({
-        "status": "online",
-        "game": "AREA 51",
-        "version": "3.0"
-    })
-
-
-@web_app.route("/api/player")
-def api_player():
-
-    uid = request.args.get("id", "").strip()
-
-    if not uid:
-        return jsonify({
-            "error": "missing id"
-        }), 400
-
-    db = load_db()
-
-    player = db["players"].get(uid)
+    player = get_player(user_id)
 
     if not player:
         return jsonify({
-            "error": "player not found"
+            "error": "player_not_found"
         }), 404
 
-    normalize_player(player)
-
-    return jsonify(player_public(player))
-
-
-@web_app.route("/api/mission", methods=["POST"])
-def api_mission():
-
-    data = request.get_json(silent=True) or {}
-
-    uid = str(data.get("id", "")).strip()
-
-    if not uid:
-        return jsonify({
-            "error": "missing id"
-        }), 400
-
-    db = load_db()
-
-    player = db["players"].get(uid)
-
-    if not player:
-        return jsonify({
-            "error": "player not found"
-        }), 404
-
-    normalize_player(player)
-
-    if player["energy"] < 20:
-        return jsonify({
-            "success": False,
-            "message": "Ba ka da Energy."
-        }), 400
-
-    player["energy"] -= 20
-
-    reward = random.randint(20, 60)
-
-    player["coins"] += reward
-    player["missions"] += 1
-
-    xp = random.randint(10, 30)
-
-    level_before = player["level"]
-
-    add_xp(player, xp)
-
-    save_db(db)
-
-    return jsonify({
-        "success": True,
-        "reward": reward,
-        "xp": xp,
-        "level_up": player["level"] > level_before,
-        "player": player_public(player)
-    })
-
-
-@web_app.route("/api/slot", methods=["POST"])
-def api_slot():
-
-    data = request.get_json(silent=True) or {}
-
-    uid = str(data.get("id", "")).strip()
-
-    if not uid:
-        return jsonify({
-            "error": "missing id"
-        }), 400
-
-    db = load_db()
-
-    player = db["players"].get(uid)
-
-    if not player:
-        return jsonify({
-            "error": "player not found"
-        }), 404
-
-    normalize_player(player)
-
-    cost = 20
-
-    if player["coins"] < cost:
-        return jsonify({
-            "success": False,
-            "message": "Ba ka da Coins."
-        }), 400
-
-    player["coins"] -= cost
-    player["games"] += 1
-
-    symbols = ["💰", "🚀", "👽", "⭐", "💎"]
-
-    result = [
-        random.choice(symbols),
-        random.choice(symbols),
-        random.choice(symbols)
-    ]
-
-    reward = 0
-
-    if result[0] == result[1] == result[2]:
-        reward = 150
-
-    elif (
-        result[0] == result[1]
-        or result[1] == result[2]
-        or result[0] == result[2]
-    ):
-        reward = 40
-
-    if reward:
-        player["coins"] += reward
-        player["wins"] += 1
-        add_xp(player, 20)
-
-    save_db(db)
-
-    return jsonify({
-        "success": True,
-        "result": result,
-        "reward": reward,
-        "win": reward > 0,
-        "player": player_public(player)
-    })
-
-
-@web_app.route("/api/dice", methods=["POST"])
-def api_dice():
-
-    data = request.get_json(silent=True) or {}
-
-    uid = str(data.get("id", "")).strip()
-
-    if not uid:
-        return jsonify({
-            "error": "missing id"
-        }), 400
-
-    db = load_db()
-
-    player = db["players"].get(uid)
-
-    if not player:
-        return jsonify({
-            "error": "player not found"
-        }), 404
-
-    normalize_player(player)
-
-    cost = 20
-
-    if player["coins"] < cost:
-        return jsonify({
-            "success": False,
-            "message": "Ba ka da Coins."
-        }), 400
-
-    player["coins"] -= cost
-    player["games"] += 1
-
-    number = random.randint(1, 6)
-
-    reward = 0
-
-    if number == 6:
-        reward = 100
-
-    elif number >= 4:
-        reward = 40
-
-    if reward:
-        player["coins"] += reward
-        player["wins"] += 1
-        add_xp(player, 20 if number == 6 else 10)
-
-    save_db(db)
-
-    return jsonify({
-        "success": True,
-        "number": number,
-        "reward": reward,
-        "win": reward > 0,
-        "player": player_public(player)
-    })
+    return jsonify(player)
 
 
 @web_app.route("/api/leaderboard")
@@ -1062,80 +876,103 @@ def api_leaderboard():
 
     db = load_db()
 
-    players = []
-
-    for player in db["players"].values():
-
-        normalize_player(player)
-
-        players.append({
-            "name": player.get("name", "Agent"),
-            "coins": player.get("coins", 0),
-            "level": player.get("level", 1),
-            "wins": player.get("wins", 0),
-            "missions": player.get("missions", 0)
-        })
+    players = list(db.values())
 
     players.sort(
-        key=lambda x: x["coins"],
+        key=lambda x: (
+            x.get("coins", 0),
+            x.get("wins", 0),
+            x.get("level", 1)
+        ),
         reverse=True
     )
 
     return jsonify(players[:50])
 
 
-# =========================================================
-# ENERGY RECHARGE
-# =========================================================
+@web_app.route("/api/health")
+def api_health():
 
-def recharge_all_players():
-
-    while True:
-
-        import time
-
-        time.sleep(600)
-
-        try:
-
-            db = load_db()
-
-            changed = False
-
-            for player in db["players"].values():
-
-                normalize_player(player)
-
-                if player["energy"] < player["max_energy"]:
-
-                    old = player["energy"]
-
-                    player["energy"] = min(
-                        player["max_energy"],
-                        player["energy"] + 5
-                    )
-
-                    if old != player["energy"]:
-                        changed = True
-
-            if changed:
-                save_db(db)
-
-        except Exception:
-
-            logger.exception(
-                "Energy recharge error"
-            )
+    return jsonify({
+        "status": "online",
+        "game": "AREA 51",
+        "version": "V4"
+    })
 
 
 # =========================================================
-# FLASK SERVER
+# TELEGRAM BOT
+# =========================================================
+
+application = None
+
+
+def create_application():
+
+    global application
+
+    if not BOT_TOKEN:
+        logger.warning(
+            "BOT_TOKEN ba a samu ba. Telegram bot ba zai fara ba."
+        )
+        return None
+
+    application = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .build()
+    )
+
+    application.add_handler(
+        CommandHandler("start", start)
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(callback_handler)
+    )
+
+    return application
+
+
+def run_telegram_bot():
+
+    if not BOT_TOKEN:
+        logger.error(
+            "BOT_TOKEN bai samu ba. "
+            "Set BOT_TOKEN kafin fara bot."
+        )
+        return
+
+    try:
+
+        app = create_application()
+
+        if app is None:
+            return
+
+        logger.info("Telegram bot starting...")
+
+        app.run_polling(
+            allowed_updates=Update.ALL_TYPES,
+            drop_pending_updates=True
+        )
+
+    except Exception as e:
+
+        logger.exception(
+            "Telegram bot error: %s",
+            e
+        )
+
+
+# =========================================================
+# START EVERYTHING
 # =========================================================
 
 def run_web():
 
     logger.info(
-        "🌐 Web server starting on port %s",
+        "Starting Flask on port %s",
         PORT
     )
 
@@ -1147,31 +984,12 @@ def run_web():
     )
 
 
-# =========================================================
-# ERROR HANDLER
-# =========================================================
-
-async def error_handler(
-    update: object,
-    context: ContextTypes.DEFAULT_TYPE
-):
-
-    logger.exception(
-        "Telegram update error",
-        exc_info=context.error
-    )
-
-
-# =========================================================
-# MAIN
-# =========================================================
-
 def main():
 
     print()
-    print("=" * 45)
-    print("        👽 AREA 51 GAME V3")
-    print("=" * 45)
+    print("=" * 50)
+    print("        👽 AREA 51 GAME V4")
+    print("=" * 50)
     print()
     print("🟢 Starting...")
     print()
@@ -1180,66 +998,28 @@ def main():
     print()
 
     if not BOT_TOKEN:
-
-        print("❌ ERROR:")
-        print("BOT_TOKEN bai samu ba.")
+        print("⚠️ BOT_TOKEN bai samu ba.")
         print()
-        print("A Termux yi:")
+        print('A Termux yi:')
         print('export BOT_TOKEN="YOUR_BOT_TOKEN"')
         print()
+        print("Web game zai iya aiki,")
+        print("amma Telegram bot ba zai fara ba.")
+        print()
 
-        return
-
-    # Flask
-    web_thread = threading.Thread(
-        target=run_web,
+    bot_thread = threading.Thread(
+        target=run_telegram_bot,
         daemon=True
     )
 
-    web_thread.start()
+    bot_thread.start()
 
-    # Energy system
-    energy_thread = threading.Thread(
-        target=recharge_all_players,
-        daemon=True
-    )
+    run_web()
 
-    energy_thread.start()
 
-    # Telegram
-    application = (
-        Application
-        .builder()
-        .token(BOT_TOKEN)
-        .build()
-    )
-
-    application.add_handler(
-        CommandHandler("start", start)
-    )
-
-    application.add_handler(
-        CallbackQueryHandler(button_handler)
-    )
-
-    application.add_error_handler(
-        error_handler
-    )
-
-    print("=" * 45)
-    print("👽 AREA 51 GAME YANA AIKI!")
-    print("=" * 45)
-    print()
-    print("Telegram: /start")
-    print("Web: /")
-    print()
-    print("Kada ka rufe Termux yayin testing.")
-    print()
-
-    application.run_polling(
-        drop_pending_updates=True
-    )
-
+# =========================================================
+# ENTRY POINT
+# =========================================================
 
 if __name__ == "__main__":
     main()
