@@ -1,3 +1,9 @@
+"use strict";
+
+/* =========================================================
+   👽 AREA 51 WAR ZONE — GAME.JS V2
+   ========================================================= */
+
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
 
@@ -11,15 +17,23 @@ const message = document.getElementById("message");
 const gameover = document.getElementById("gameover");
 const finalText = document.getElementById("finalText");
 
-let W = innerWidth;
-let H = innerHeight;
+const startBtn = document.getElementById("startBtn");
+const restartBtn = document.getElementById("restartBtn");
+const fullscreenBtn = document.getElementById("fullscreenBtn");
+
+const joyEl = document.getElementById("joystick");
+const stick = document.getElementById("stick");
+const fireBtn = document.getElementById("fire");
+
+let W = window.innerWidth;
+let H = window.innerHeight;
 let dpr = 1;
 
 function resize() {
-    dpr = Math.min(devicePixelRatio || 1, 2);
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
 
-    W = innerWidth;
-    H = innerHeight;
+    W = window.innerWidth;
+    H = window.innerHeight;
 
     canvas.width = W * dpr;
     canvas.height = H * dpr;
@@ -30,8 +44,12 @@ function resize() {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 
-addEventListener("resize", resize);
+window.addEventListener("resize", resize);
 resize();
+
+/* =========================================================
+   INPUT
+   ========================================================= */
 
 const keys = {
     up: false,
@@ -41,87 +59,151 @@ const keys = {
     fire: false
 };
 
-let running = false;
-let last = 0;
-let spawnTimer = 0;
-let shotTimer = 0;
-let flash = 0;
-
-let wave = 1;
-let kills = 0;
-let coins = 100;
-let level = 1;
-
-let player = {
-    x: 0,
-    y: 0,
-
-    r: 20,
-
-    maxHp: 250,
-    hp: 250,
-
-    maxArmor: 100,
-    armor: 100,
-
-    speed: 230,
-
-    angle: -Math.PI / 2,
-
-    regenTimer: 0,
-    damageCooldown: 0
-};
-
-let enemies = [];
-let bullets = [];
-let particles = [];
-let medkits = [];
-
-const joy = {
+const joystick = {
     active: false,
     id: null,
     x: 0,
     y: 0
 };
 
-const stick = document.getElementById("stick");
-const joyEl = document.getElementById("joystick");
+/* =========================================================
+   GAME STATE
+   ========================================================= */
 
+let running = false;
+let last = 0;
 
-// =========================================================
-// RESET
-// =========================================================
+let spawnTimer = 0;
+let shotTimer = 0;
+let reloadTimer = 0;
 
-function reset() {
+let wave = 1;
+let kills = 0;
+let coins = 100;
+let level = 1;
+let xp = 0;
 
+let ammo = 30;
+let maxAmmo = 30;
+
+let grenades = 3;
+let medkits = 2;
+
+let bossAlive = false;
+let waveMessageTimer = 0;
+
+let enemies = [];
+let bullets = [];
+let enemyBullets = [];
+let particles = [];
+let pickups = [];
+let explosions = [];
+
+/* =========================================================
+   PLAYER
+   ========================================================= */
+
+const player = {
+    x: 0,
+    y: 0,
+
+    r: 19,
+
+    hp: 180,
+    maxHp: 180,
+
+    speed: 235,
+
+    angle: -Math.PI / 2,
+
+    damage: 2,
+
+    fireRate: 0.13,
+
+    invulnerable: 0,
+
+    recoil: 0
+};
+
+/* =========================================================
+   SAVE
+   ========================================================= */
+
+function saveProgress() {
+    try {
+        localStorage.setItem(
+            "area51-war-progress",
+            JSON.stringify({
+                coins,
+                level,
+                xp,
+                kills
+            })
+        );
+    } catch (e) {}
+}
+
+function loadProgress() {
+    try {
+        const raw = localStorage.getItem("area51-war-progress");
+
+        if (!raw) return;
+
+        const data = JSON.parse(raw);
+
+        if (Number.isFinite(data.coins)) coins = data.coins;
+        if (Number.isFinite(data.level)) level = data.level;
+        if (Number.isFinite(data.xp)) xp = data.xp;
+        if (Number.isFinite(data.kills)) kills = data.kills;
+    } catch (e) {}
+}
+
+loadProgress();
+
+/* =========================================================
+   RESET
+   ========================================================= */
+
+function resetGame() {
     player.x = W / 2;
     player.y = H / 2;
 
     player.hp = player.maxHp;
-    player.armor = player.maxArmor;
-
     player.angle = -Math.PI / 2;
+    player.invulnerable = 1;
+    player.recoil = 0;
 
-    player.regenTimer = 0;
-    player.damageCooldown = 0;
+    wave = 1;
+
+    ammo = maxAmmo;
+
+    grenades = 3;
+    medkits = 2;
 
     enemies = [];
     bullets = [];
+    enemyBullets = [];
     particles = [];
-    medkits = [];
+    pickups = [];
+    explosions = [];
 
-    wave = 1;
-    kills = 0;
-    coins = 100;
-    level = 1;
-
-    spawnTimer = 1.5;
+    spawnTimer = 0.3;
     shotTimer = 0;
+    reloadTimer = 0;
+
+    bossAlive = false;
+    waveMessageTimer = 3;
 
     running = true;
 
-    message.classList.add("hidden");
-    gameover.classList.add("hidden");
+    if (message) {
+        message.classList.remove("hidden");
+        message.textContent = "👽 WAVE 1 — AREA 51 IS UNDER ATTACK!";
+    }
+
+    if (gameover) {
+        gameover.classList.add("hidden");
+    }
 
     last = performance.now();
 
@@ -130,206 +212,312 @@ function reset() {
     requestAnimationFrame(loop);
 }
 
+/* =========================================================
+   ENEMY SPAWNING
+   ========================================================= */
 
-// =========================================================
-// ENEMY
-// =========================================================
-
-function spawnEnemy() {
-
+function randomEdgePosition() {
     const side = Math.floor(Math.random() * 4);
-
-    const pad = 60;
-
-    let x;
-    let y;
+    const pad = 55;
 
     if (side === 0) {
-        x = -pad;
-        y = Math.random() * H;
+        return {
+            x: -pad,
+            y: 80 + Math.random() * Math.max(50, H - 130)
+        };
     }
 
     if (side === 1) {
-        x = W + pad;
-        y = Math.random() * H;
+        return {
+            x: W + pad,
+            y: 80 + Math.random() * Math.max(50, H - 130)
+        };
     }
 
     if (side === 2) {
-        x = Math.random() * W;
-        y = -pad;
+        return {
+            x: Math.random() * W,
+            y: -pad
+        };
     }
 
-    if (side === 3) {
-        x = Math.random() * W;
-        y = H + pad;
-    }
-
-    const eliteChance = Math.min(0.05 + wave * 0.01, 0.25);
-
-    const elite = Math.random() < eliteChance;
-
-    enemies.push({
-
-        x,
-        y,
-
-        r: elite ? 19 : 16,
-
-        hp: elite ? 5 + Math.floor(wave / 4) : 2,
-
-        speed: elite
-            ? 45 + wave * 2
-            : 42 + wave * 3,
-
-        shoot:
-            2.0 + Math.random() * 2.0,
-
-        hit: 0,
-
-        elite
-    });
+    return {
+        x: Math.random() * W,
+        y: H + pad
+    };
 }
 
+function spawnEnemy(type = "soldier") {
+    const pos = randomEdgePosition();
 
-// =========================================================
-// PLAYER SHOOT
-// =========================================================
+    if (type === "boss") {
+        enemies.push({
+            x: pos.x,
+            y: pos.y,
 
-function shoot() {
+            r: 30,
 
-    if (!running) return;
+            hp: 100 + wave * 30,
+            maxHp: 100 + wave * 30,
 
-    const a = player.angle;
+            speed: 38 + wave * 2,
 
-    bullets.push({
+            damage: 12,
 
-        x: player.x + Math.cos(a) * 25,
+            shoot: 0.8,
 
-        y: player.y + Math.sin(a) * 25,
+            shootRate: 0.9,
 
-        vx: Math.cos(a) * 650,
+            type: "boss",
 
-        vy: Math.sin(a) * 650,
+            hit: 0
+        });
 
-        life: 1.2
-    });
-
-    shotTimer = 0.14;
-
-    flash = 0.04;
-}
-
-
-// =========================================================
-// DAMAGE SYSTEM
-// =========================================================
-
-function damagePlayer(amount) {
-
-    if (!running) return;
-
-    if (player.damageCooldown > 0) {
+        bossAlive = true;
         return;
     }
 
-    /*
-     * Armor absorbs most damage.
-     */
+    const elite = Math.random() < Math.min(0.08 + wave * 0.01, 0.22);
 
-    if (player.armor > 0) {
+    const hp = elite
+        ? 6 + Math.floor(wave * 0.7)
+        : 2 + Math.floor(wave * 0.25);
 
-        const armorDamage = Math.min(
-            player.armor,
-            amount * 0.75
-        );
+    enemies.push({
+        x: pos.x,
+        y: pos.y,
 
-        player.armor -= armorDamage;
+        r: elite ? 19 : 16,
 
-        amount -= armorDamage;
-    }
+        hp,
+        maxHp: hp,
 
-    /*
-     * Remaining damage goes to HP.
-     */
+        speed: elite
+            ? 48 + wave * 3
+            : 55 + wave * 4,
 
-    if (amount > 0) {
-        player.hp -= amount;
-    }
+        damage: elite ? 10 : 6,
 
-    player.damageCooldown = 0.25;
+        shoot: 1 + Math.random() * 1.8,
 
-    player.regenTimer = 0;
+        shootRate: elite ? 1.0 : 1.5 + Math.random(),
 
-    flash = 0.10;
+        type: elite ? "elite" : "soldier",
 
-    burst(
-        player.x,
-        player.y,
-        6
-    );
-}
-
-
-// =========================================================
-// MEDKIT
-// =========================================================
-
-function spawnMedkit(x, y) {
-
-    medkits.push({
-
-        x,
-        y,
-
-        r: 13,
-
-        life: 15
+        hit: 0
     });
 }
 
+/* =========================================================
+   PLAYER SHOOTING
+   ========================================================= */
 
-function collectMedkits() {
+function shoot() {
+    if (!running) return;
 
-    for (let i = medkits.length - 1; i >= 0; i--) {
+    if (reloadTimer > 0) return;
 
-        const m = medkits[i];
+    if (ammo <= 0) {
+        reload();
+        return;
+    }
 
+    const angle = player.angle;
+
+    const spread =
+        (Math.random() - 0.5) * 0.035;
+
+    const a = angle + spread;
+
+    bullets.push({
+        x: player.x + Math.cos(a) * 27,
+        y: player.y + Math.sin(a) * 27,
+
+        vx: Math.cos(a) * 720,
+        vy: Math.sin(a) * 720,
+
+        life: 1.1,
+
+        damage: player.damage
+    });
+
+    ammo--;
+
+    shotTimer = player.fireRate;
+
+    player.recoil = 0.08;
+
+    burst(
+        player.x + Math.cos(a) * 28,
+        player.y + Math.sin(a) * 28,
+        2,
+        "#fff1a0"
+    );
+
+    if (ammo <= 0) {
+        reload();
+    }
+}
+
+function reload() {
+    if (reloadTimer > 0) return;
+
+    if (ammo >= maxAmmo) return;
+
+    reloadTimer = 1.15;
+
+    if (message) {
+        message.textContent = "🔄 RELOADING...";
+        message.classList.remove("hidden");
+    }
+}
+
+/* =========================================================
+   GRENADE
+   ========================================================= */
+
+function throwGrenade() {
+    if (!running) return;
+
+    if (grenades <= 0) {
+        showMessage("💣 NO GRENADES!");
+        return;
+    }
+
+    grenades--;
+
+    const distance = 180;
+
+    const gx =
+        player.x +
+        Math.cos(player.angle) * distance;
+
+    const gy =
+        player.y +
+        Math.sin(player.angle) * distance;
+
+    explosions.push({
+        x: gx,
+        y: gy,
+        timer: 0.35,
+        max: 0.35,
+        radius: 130
+    });
+
+    burst(gx, gy, 25, "#ffb347");
+
+    for (const enemy of enemies) {
         const d = Math.hypot(
-            player.x - m.x,
-            player.y - m.y
+            enemy.x - gx,
+            enemy.y - gy
         );
 
-        if (d < player.r + m.r) {
-
-            player.hp = Math.min(
-                player.maxHp,
-                player.hp + 55
-            );
-
-            player.armor = Math.min(
-                player.maxArmor,
-                player.armor + 20
-            );
-
-            coins += 3;
-
-            medkits.splice(i, 1);
-
-            burst(
-                m.x,
-                m.y,
-                12
-            );
+        if (d < 130) {
+            enemy.hp -= 30;
         }
     }
 }
 
+/* =========================================================
+   MEDKIT
+   ========================================================= */
 
-// =========================================================
-// UPDATE
-// =========================================================
+function useMedkit() {
+    if (!running) return;
+
+    if (medkits <= 0) {
+        showMessage("❤️ NO MEDKIT!");
+        return;
+    }
+
+    if (player.hp >= player.maxHp) {
+        showMessage("❤️ HP IS FULL!");
+        return;
+    }
+
+    medkits--;
+
+    player.hp = Math.min(
+        player.maxHp,
+        player.hp + 65
+    );
+
+    burst(player.x, player.y, 15, "#45ff87");
+
+    showMessage("❤️ +65 HP");
+}
+
+/* =========================================================
+   ENEMY SHOOTING
+   ========================================================= */
+
+function enemyShoot(enemy) {
+    const a = Math.atan2(
+        player.y - enemy.y,
+        player.x - enemy.x
+    );
+
+    enemyBullets.push({
+        x: enemy.x,
+        y: enemy.y,
+
+        vx: Math.cos(a) * 260,
+        vy: Math.sin(a) * 260,
+
+        life: 2.5,
+
+        damage:
+            enemy.type === "boss"
+                ? 14
+                : enemy.type === "elite"
+                    ? 9
+                    : 5
+    });
+}
+
+/* =========================================================
+   DAMAGE
+   ========================================================= */
+
+function damagePlayer(amount) {
+    if (player.invulnerable > 0) return;
+
+    player.hp -= amount;
+
+    player.invulnerable = 0.28;
+
+    burst(player.x, player.y, 6, "#ff554d");
+
+    if (player.hp <= 0) {
+        player.hp = 0;
+        endGame();
+    }
+}
+
+/* =========================================================
+   UPDATE
+   ========================================================= */
 
 function update(dt) {
+    if (!running) return;
+
+    player.invulnerable -= dt;
+    player.recoil = Math.max(0, player.recoil - dt);
+
+    shotTimer -= dt;
+
+    waveMessageTimer -= dt;
+
+    if (reloadTimer > 0) {
+        reloadTimer -= dt;
+
+        if (reloadTimer <= 0) {
+            ammo = maxAmmo;
+            showMessage("🔫 RELOADED!");
+        }
+    }
+
+    /* movement */
 
     let dx =
         (keys.right ? 1 : 0) -
@@ -339,135 +527,137 @@ function update(dt) {
         (keys.down ? 1 : 0) -
         (keys.up ? 1 : 0);
 
-
-    if (joy.active) {
-
-        dx = joy.x;
-        dy = joy.y;
+    if (joystick.active) {
+        dx = joystick.x;
+        dy = joystick.y;
     }
-
 
     const len = Math.hypot(dx, dy);
 
-
-    if (len > 1) {
-
-        dx /= len;
-        dy /= len;
-    }
-
-
     if (len > 0.08) {
+        if (len > 1) {
+            dx /= len;
+            dy /= len;
+        }
 
-        player.x +=
-            dx * player.speed * dt;
+        player.x += dx * player.speed * dt;
+        player.y += dy * player.speed * dt;
 
-        player.y +=
-            dy * player.speed * dt;
-
-        player.angle =
-            Math.atan2(dy, dx);
+        player.angle = Math.atan2(dy, dx);
     }
-
-
-    /*
-     * Keep player inside arena.
-     */
 
     player.x = Math.max(
-        24,
-        Math.min(W - 24, player.x)
+        22,
+        Math.min(W - 22, player.x)
     );
 
     player.y = Math.max(
         70,
-        Math.min(H - 24, player.y)
+        Math.min(H - 22, player.y)
     );
 
-
-    /*
-     * Timers
-     */
-
-    shotTimer -= dt;
-
-    player.damageCooldown -= dt;
-
-
-    /*
-     * Automatic shooting
-     */
-
-    if (
-        keys.fire &&
-        shotTimer <= 0
-    ) {
+    if (keys.fire && shotTimer <= 0) {
         shoot();
     }
 
+    /* enemy spawn */
 
-    /*
-     * Slow HP regeneration.
-     *
-     * Player must avoid damage for a while.
-     */
-
-    player.regenTimer += dt;
-
-    if (
-        player.regenTimer > 4 &&
-        player.hp > 0 &&
-        player.hp < player.maxHp
-    ) {
-
-        player.hp = Math.min(
-            player.maxHp,
-            player.hp + 4 * dt
+    const desiredEnemies =
+        Math.min(
+            4 + wave * 2,
+            25
         );
-    }
-
-
-    /*
-     * Spawn enemies slowly at first.
-     */
 
     spawnTimer -= dt;
 
-
-    const targetEnemies =
-        Math.min(
-            2 + Math.floor(wave * 0.7),
-            14
-        );
-
-
     if (
         spawnTimer <= 0 &&
-        enemies.length < targetEnemies
+        enemies.length < desiredEnemies
     ) {
-
         spawnEnemy();
 
         spawnTimer =
             Math.max(
-                0.65,
-                1.7 - wave * 0.035
+                0.18,
+                0.85 - wave * 0.025
             );
     }
 
+    /* boss */
 
-    /*
-     * Bullets
-     */
-
-    for (const b of bullets) {
-
-        b.x += b.vx * dt;
-        b.y += b.vy * dt;
-
-        b.life -= dt;
+    if (
+        wave >= 5 &&
+        wave % 5 === 0 &&
+        !bossAlive &&
+        enemies.length <= 2
+    ) {
+        spawnEnemy("boss");
     }
 
+    /* bullets */
+
+    updateBullets(dt);
+
+    updateEnemyBullets(dt);
+
+    /* enemies */
+
+    updateEnemies(dt);
+
+    /* collisions */
+
+    checkBulletHits();
+
+    checkEnemyBulletHits();
+
+    /* particles */
+
+    for (const p of particles) {
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        p.life -= dt;
+    }
+
+    particles = particles.filter(
+        p => p.life > 0
+    );
+
+    /* explosions */
+
+    for (const e of explosions) {
+        e.timer -= dt;
+    }
+
+    explosions = explosions.filter(
+        e => e.timer > 0
+    );
+
+    /* pickups */
+
+    updatePickups(dt);
+
+    /* wave */
+
+    if (
+        enemies.length === 0 &&
+        spawnTimer <= 0
+    ) {
+        nextWave();
+    }
+
+    updateHud();
+}
+
+/* =========================================================
+   BULLETS
+   ========================================================= */
+
+function updateBullets(dt) {
+    for (const b of bullets) {
+        b.x += b.vx * dt;
+        b.y += b.vy * dt;
+        b.life -= dt;
+    }
 
     bullets = bullets.filter(
         b =>
@@ -477,463 +667,770 @@ function update(dt) {
             b.y > -40 &&
             b.y < H + 40
     );
+}
 
+function updateEnemyBullets(dt) {
+    for (const b of enemyBullets) {
+        b.x += b.vx * dt;
+        b.y += b.vy * dt;
+        b.life -= dt;
+    }
 
-    /*
-     * Enemy movement and attacks.
-     */
+    enemyBullets = enemyBullets.filter(
+        b =>
+            b.life > 0 &&
+            b.x > -40 &&
+            b.x < W + 40 &&
+            b.y > -40 &&
+            b.y < H + 40
+    );
+}
 
+/* =========================================================
+   ENEMIES
+   ========================================================= */
+
+function updateEnemies(dt) {
     for (const e of enemies) {
+        const dx = player.x - e.x;
+        const dy = player.y - e.y;
 
-        const a = Math.atan2(
-            player.y - e.y,
-            player.x - e.x
-        );
+        const distance = Math.hypot(dx, dy);
 
-        const d = Math.hypot(
-            player.x - e.x,
-            player.y - e.y
-        );
+        const angle = Math.atan2(dy, dx);
 
-
-        /*
-         * Do not let enemies instantly
-         * reach the player.
-         */
-
-        if (d > 52) {
-
+        if (distance > 90) {
             e.x +=
-                Math.cos(a) *
+                Math.cos(angle) *
                 e.speed *
                 dt;
 
             e.y +=
-                Math.sin(a) *
+                Math.sin(angle) *
                 e.speed *
                 dt;
         }
 
-
         e.shoot -= dt;
         e.hit -= dt;
 
-
-        /*
-         * Ranged enemy damage.
-         *
-         * Very low at early waves.
-         */
-
         if (
             e.shoot <= 0 &&
-            d < 500
+            distance < 520
         ) {
-
-            const baseDamage =
-                e.elite
-                    ? 4 + wave * 0.12
-                    : 2.5 + wave * 0.08;
-
-            damagePlayer(baseDamage);
+            enemyShoot(e);
 
             e.shoot =
-                e.elite
-                    ? 2.5 + Math.random() * 1.5
-                    : 3.0 + Math.random() * 2.0;
+                e.shootRate +
+                Math.random() * 0.8;
         }
 
-
-        /*
-         * Contact damage is also gentle.
-         */
-
-        if (d < 34) {
-
+        if (distance < e.r + player.r + 8) {
             damagePlayer(
-                e.elite
-                    ? 5 * dt
-                    : 2.5 * dt
+                e.type === "boss"
+                    ? 18 * dt
+                    : e.damage * dt
             );
         }
     }
+}
 
+/* =========================================================
+   COLLISION: PLAYER BULLETS
+   ========================================================= */
 
-    /*
-     * Bullet collisions.
-     */
-
+function checkBulletHits() {
     for (
-        let i = enemies.length - 1;
+        let i = bullets.length - 1;
         i >= 0;
         i--
     ) {
+        const b = bullets[i];
 
-        let killed = false;
+        let hitSomething = false;
 
         for (
-            let j = bullets.length - 1;
+            let j = enemies.length - 1;
             j >= 0;
             j--
         ) {
+            const e = enemies[j];
 
-            const e = enemies[i];
-            const b = bullets[j];
+            const d = Math.hypot(
+                e.x - b.x,
+                e.y - b.y
+            );
 
-            if (
-                Math.hypot(
-                    e.x - b.x,
-                    e.y - b.y
-                ) < e.r + 6
-            ) {
+            if (d < e.r + 6) {
+                e.hp -= b.damage;
+                e.hit = 0.08;
 
-                e.hp--;
-
-                e.hit = 0.10;
-
-                bullets.splice(j, 1);
+                bullets.splice(i, 1);
 
                 burst(
-                    e.x,
-                    e.y,
-                    5
+                    b.x,
+                    b.y,
+                    5,
+                    "#ffd166"
                 );
 
+                hitSomething = true;
 
                 if (e.hp <= 0) {
-
-                    enemies.splice(i, 1);
-
-                    kills++;
-
-                    coins += e.elite ? 18 : 8;
-
-                    level =
-                        1 +
-                        Math.floor(kills / 10);
-
-                    wave =
-                        1 +
-                        Math.floor(kills / 8);
-
-
-                    /*
-                     * Chance to drop medkit.
-                     */
-
-                    if (
-                        Math.random() <
-                        0.16
-                    ) {
-
-                        spawnMedkit(
-                            e.x,
-                            e.y
-                        );
-                    }
-
-
-                    killed = true;
-
-                    break;
+                    killEnemy(j);
                 }
+
+                break;
             }
         }
 
-        if (killed) {
-            continue;
+        if (hitSomething) continue;
+    }
+}
+
+/* =========================================================
+   COLLISION: ENEMY BULLETS
+   ========================================================= */
+
+function checkEnemyBulletHits() {
+    for (
+        let i = enemyBullets.length - 1;
+        i >= 0;
+        i--
+    ) {
+        const b = enemyBullets[i];
+
+        const d = Math.hypot(
+            player.x - b.x,
+            player.y - b.y
+        );
+
+        if (d < player.r + 7) {
+            damagePlayer(b.damage);
+
+            enemyBullets.splice(i, 1);
         }
     }
+}
 
+/* =========================================================
+   KILL
+   ========================================================= */
 
-    /*
-     * Medkits expire.
-     */
+function killEnemy(index) {
+    const enemy = enemies[index];
 
-    for (const m of medkits) {
-        m.life -= dt;
+    if (!enemy) return;
+
+    enemies.splice(index, 1);
+
+    kills++;
+
+    let reward = 8;
+    let gainedXp = 10;
+
+    if (enemy.type === "elite") {
+        reward = 20;
+        gainedXp = 25;
     }
 
-    medkits = medkits.filter(
-        m => m.life > 0
+    if (enemy.type === "boss") {
+        reward = 150;
+        gainedXp = 100;
+        bossAlive = false;
+
+        showMessage("💀 BOSS DEFEATED! +150 COINS");
+    }
+
+    coins += reward;
+    xp += gainedXp;
+
+    burst(
+        enemy.x,
+        enemy.y,
+        enemy.type === "boss" ? 35 : 12,
+        "#ff9f43"
     );
 
+    /* chance of pickup */
 
-    collectMedkits();
+    if (Math.random() < 0.12) {
+        pickups.push({
+            x: enemy.x,
+            y: enemy.y,
+            type:
+                Math.random() < 0.5
+                    ? "medkit"
+                    : "ammo",
+            life: 15
+        });
+    }
 
+    checkLevelUp();
 
-    /*
-     * Particles
-     */
+    saveProgress();
+}
 
-    particles.forEach(p => {
+/* =========================================================
+   XP / LEVEL
+   ========================================================= */
 
-        p.x += p.vx * dt;
-        p.y += p.vy * dt;
+function checkLevelUp() {
+    const needed = level * 100;
 
-        p.life -= dt;
-    });
+    if (xp >= needed) {
+        xp -= needed;
+        level++;
 
+        player.maxHp += 10;
+        player.hp = player.maxHp;
 
-    particles = particles.filter(
-        p => p.life > 0
-    );
+        player.damage += 0.4;
 
+        if (level % 3 === 0) {
+            maxAmmo += 3;
+        }
 
-    /*
-     * Game over.
-     */
+        showMessage(
+            `⭐ LEVEL UP! LEVEL ${level}`
+        );
 
-    if (player.hp <= 0) {
+        burst(
+            player.x,
+            player.y,
+            30,
+            "#55f5c3"
+        );
 
-        player.hp = 0;
+        saveProgress();
+    }
+}
 
-        running = false;
+/* =========================================================
+   WAVES
+   ========================================================= */
 
-        finalText.textContent =
-            `You survived to wave ${wave} ` +
-            `and defeated ${kills} soldiers. ` +
-            `Coins: ${coins}`;
+function nextWave() {
+    wave++;
 
-        gameover.classList.remove(
-            "hidden"
+    spawnTimer = 1;
+
+    waveMessageTimer = 3;
+
+    if (wave % 5 === 0) {
+        showMessage(
+            `☠️ BOSS WAVE ${wave}!`
+        );
+    } else {
+        showMessage(
+            `🎯 WAVE ${wave} INCOMING!`
         );
     }
 
-
-    updateHud();
+    player.hp = Math.min(
+        player.maxHp,
+        player.hp + 15
+    );
 }
 
+/* =========================================================
+   PICKUPS
+   ========================================================= */
 
-// =========================================================
-// PARTICLES
-// =========================================================
+function updatePickups(dt) {
+    for (const p of pickups) {
+        p.life -= dt;
 
-function burst(x, y, n) {
+        const d = Math.hypot(
+            player.x - p.x,
+            player.y - p.y
+        );
 
-    for (let i = 0; i < n; i++) {
+        if (d < 30) {
+            if (p.type === "medkit") {
+                medkits++;
+                showMessage("❤️ MEDKIT +1");
+            } else {
+                ammo = Math.min(
+                    maxAmmo,
+                    ammo + 12
+                );
 
+                showMessage("🔫 AMMO +12");
+            }
+
+            p.life = 0;
+        }
+    }
+
+    pickups = pickups.filter(
+        p => p.life > 0
+    );
+}
+
+/* =========================================================
+   PARTICLES
+   ========================================================= */
+
+function burst(
+    x,
+    y,
+    amount = 8,
+    color = "#ffd166"
+) {
+    for (let i = 0; i < amount; i++) {
         const a =
             Math.random() *
-            Math.PI * 2;
+            Math.PI *
+            2;
 
-        const s =
-            30 +
-            Math.random() * 100;
+        const speed =
+            35 +
+            Math.random() * 130;
 
         particles.push({
-
             x,
             y,
 
             vx:
-                Math.cos(a) * s,
+                Math.cos(a) *
+                speed,
 
             vy:
-                Math.sin(a) * s,
+                Math.sin(a) *
+                speed,
 
             life:
                 0.25 +
-                Math.random() * 0.35
+                Math.random() *
+                0.45,
+
+            color
         });
     }
 }
 
+/* =========================================================
+   MESSAGE
+   ========================================================= */
 
-// =========================================================
-// DRAW
-// =========================================================
+function showMessage(text) {
+    if (!message) return;
+
+    message.textContent = text;
+    message.classList.remove("hidden");
+
+    clearTimeout(showMessage.timer);
+
+    showMessage.timer =
+        setTimeout(() => {
+            if (waveMessageTimer <= 0) {
+                message.classList.add(
+                    "hidden"
+                );
+            }
+        }, 2200);
+}
+
+/* =========================================================
+   HUD
+   ========================================================= */
+
+function updateHud() {
+    if (hpEl) {
+        hpEl.textContent =
+            Math.ceil(
+                Math.max(0, player.hp)
+            );
+    }
+
+    if (coinsEl) {
+        coinsEl.textContent = coins;
+    }
+
+    if (levelEl) {
+        levelEl.textContent = level;
+    }
+
+    if (waveEl) {
+        waveEl.textContent = wave;
+    }
+
+    if (enemiesEl) {
+        enemiesEl.textContent =
+            enemies.length;
+    }
+
+    if (hpFill) {
+        hpFill.style.width =
+            `${Math.max(
+                0,
+                player.hp /
+                player.maxHp *
+                100
+            )}%`;
+    }
+}
+
+/* =========================================================
+   DRAW
+   ========================================================= */
 
 function draw() {
+    ctx.clearRect(0, 0, W, H);
 
-    ctx.clearRect(
-        0,
-        0,
-        W,
-        H
-    );
+    /* background */
 
+    ctx.fillStyle = "#07100b";
+    ctx.fillRect(0, 0, W, H);
 
-    /*
-     * Background
-     */
-
-    ctx.fillStyle =
-        "#07100b";
-
-    ctx.fillRect(
-        0,
-        0,
-        W,
-        H
-    );
-
-
-    /*
-     * Grid
-     */
+    /* grid */
 
     ctx.strokeStyle =
         "rgba(80,160,120,.10)";
 
     ctx.lineWidth = 1;
 
-
-    for (
-        let x = 0;
-        x < W;
-        x += 50
-    ) {
-
+    for (let x = 0; x < W; x += 50) {
         ctx.beginPath();
-
         ctx.moveTo(x, 0);
-
         ctx.lineTo(x, H);
-
         ctx.stroke();
     }
 
-
-    for (
-        let y = 50;
-        y < H;
-        y += 50
-    ) {
-
+    for (let y = 50; y < H; y += 50) {
         ctx.beginPath();
-
         ctx.moveTo(0, y);
-
         ctx.lineTo(W, y);
-
         ctx.stroke();
     }
 
+    drawBuildings();
 
-    /*
-     * Buildings
-     */
+    drawPickups();
+
+    drawParticles();
+
+    drawBullets();
+
+    drawEnemyBullets();
+
+    for (const e of enemies) {
+        drawSoldier(e);
+    }
+
+    drawPlayer();
+
+    drawExplosions();
+}
+
+/* =========================================================
+   BUILDINGS
+   ========================================================= */
+
+function drawBuildings() {
+    const buildings = [
+        {
+            x: W * 0.14,
+            y: H * 0.22,
+            w: 110,
+            h: 65
+        },
+        {
+            x: W * 0.70,
+            y: H * 0.25,
+            w: 140,
+            h: 70
+        },
+        {
+            x: W * 0.38,
+            y: H * 0.70,
+            w: 130,
+            h: 60
+        }
+    ];
+
+    for (const b of buildings) {
+        ctx.fillStyle = "#101a16";
+        ctx.fillRect(
+            b.x,
+            b.y,
+            b.w,
+            b.h
+        );
+
+        ctx.strokeStyle = "#25483a";
+        ctx.strokeRect(
+            b.x,
+            b.y,
+            b.w,
+            b.h
+        );
+    }
+}
+
+/* =========================================================
+   PLAYER
+   ========================================================= */
+
+function drawPlayer() {
+    ctx.save();
+
+    ctx.translate(
+        player.x,
+        player.y
+    );
+
+    ctx.rotate(player.angle);
+
+    if (player.invulnerable > 0) {
+        ctx.globalAlpha =
+            Math.sin(
+                performance.now() * 0.03
+            ) > 0
+                ? 0.45
+                : 1;
+    }
+
+    /* body */
+
+    ctx.fillStyle = "#55f5c3";
+
+    ctx.beginPath();
+
+    ctx.arc(
+        0,
+        0,
+        player.r,
+        0,
+        Math.PI * 2
+    );
+
+    ctx.fill();
+
+    /* helmet */
+
+    ctx.fillStyle = "#0b2a20";
+
+    ctx.beginPath();
+
+    ctx.ellipse(
+        4,
+        -5,
+        12,
+        8,
+        0,
+        0,
+        Math.PI * 2
+    );
+
+    ctx.fill();
+
+    /* visor */
+
+    ctx.fillStyle = "#d9fff3";
+
+    ctx.beginPath();
+
+    ctx.ellipse(
+        6,
+        -6,
+        7,
+        3,
+        0,
+        0,
+        Math.PI * 2
+    );
+
+    ctx.fill();
+
+    /* gun */
+
+    ctx.fillStyle = "#b9fff0";
+
+    ctx.fillRect(
+        12,
+        -3,
+        25,
+        6
+    );
+
+    ctx.restore();
+}
+
+/* =========================================================
+   SOLDIERS
+   ========================================================= */
+
+function drawSoldier(e) {
+    ctx.save();
+
+    ctx.translate(
+        e.x,
+        e.y
+    );
+
+    const color =
+        e.type === "boss"
+            ? "#c93d4b"
+            : e.type === "elite"
+                ? "#b77d32"
+                : "#65705e";
+
+    /* shadow */
 
     ctx.fillStyle =
-        "#101a16";
+        "rgba(0,0,0,.35)";
 
-    ctx.fillRect(
-        W * 0.18,
-        H * 0.20,
-        90,
-        55
+    ctx.beginPath();
+
+    ctx.ellipse(
+        0,
+        14,
+        e.r + 5,
+        5,
+        0,
+        0,
+        Math.PI * 2
     );
 
+    ctx.fill();
+
+    /* body */
+
+    ctx.fillStyle =
+        e.hit > 0
+            ? "#ff766c"
+            : color;
+
     ctx.fillRect(
-        W * 0.68,
-        H * 0.28,
-        120,
-        60
+        -e.r * 0.65,
+        -2,
+        e.r * 1.3,
+        e.r * 1.2
     );
 
+    /* head */
+
+    ctx.fillStyle =
+        e.type === "boss"
+            ? "#d8b08b"
+            : "#bca989";
+
+    ctx.beginPath();
+
+    ctx.arc(
+        0,
+        -e.r * 0.85,
+        e.r * 0.55,
+        0,
+        Math.PI * 2
+    );
+
+    ctx.fill();
+
+    /* helmet */
+
+    ctx.fillStyle = "#283028";
+
+    ctx.fillRect(
+        -e.r * 0.6,
+        -e.r * 1.2,
+        e.r * 1.2,
+        6
+    );
+
+    /* gun */
 
     ctx.strokeStyle =
-        "#25483a";
+        "#c5d0c7";
 
-    ctx.strokeRect(
-        W * 0.18,
-        H * 0.20,
-        90,
-        55
+    ctx.lineWidth =
+        e.type === "boss"
+            ? 5
+            : 3;
+
+    ctx.beginPath();
+
+    ctx.moveTo(
+        e.r * 0.45,
+        5
     );
 
-    ctx.strokeRect(
-        W * 0.68,
-        H * 0.28,
-        120,
-        60
+    ctx.lineTo(
+        e.r * 1.5,
+        9
     );
 
+    ctx.stroke();
 
-    /*
-     * Medkits
-     */
+    /* boss ring */
 
-    for (const m of medkits) {
+    if (e.type === "boss") {
+        ctx.strokeStyle =
+            "rgba(255,70,70,.7)";
 
-        ctx.save();
+        ctx.lineWidth = 3;
 
-        ctx.translate(
-            m.x,
-            m.y
+        ctx.beginPath();
+
+        ctx.arc(
+            0,
+            0,
+            e.r + 8,
+            0,
+            Math.PI * 2
         );
 
-        ctx.fillStyle =
-            "#ffffff";
-
-        ctx.fillRect(
-            -12,
-            -12,
-            24,
-            24
-        );
-
-        ctx.fillStyle =
-            "#e83c3c";
-
-        ctx.fillRect(
-            -4,
-            -9,
-            8,
-            18
-        );
-
-        ctx.fillRect(
-            -9,
-            -4,
-            18,
-            8
-        );
-
-        ctx.restore();
+        ctx.stroke();
     }
 
+    /* health bar */
 
-    /*
-     * Particles
-     */
+    const barW =
+        e.type === "boss"
+            ? 65
+            : 36;
 
-    for (const p of particles) {
+    ctx.fillStyle =
+        "rgba(0,0,0,.7)";
 
-        ctx.globalAlpha =
+    ctx.fillRect(
+        -barW / 2,
+        -e.r * 1.65,
+        barW,
+        5
+    );
+
+    ctx.fillStyle =
+        e.type === "boss"
+            ? "#ff3d4d"
+            : "#37e879";
+
+    ctx.fillRect(
+        -barW / 2,
+        -e.r * 1.65,
+        barW *
             Math.max(
                 0,
-                p.life * 2
-            );
+                e.hp / e.maxHp
+            ),
+        5
+    );
 
-        ctx.fillStyle =
-            "#ffd66b";
+    ctx.restore();
+}
 
-        ctx.fillRect(
-            p.x - 2,
-            p.y - 2,
-            4,
-            4
-        );
-    }
+/* =========================================================
+   BULLETS DRAW
+   ========================================================= */
 
-    ctx.globalAlpha = 1;
-
-
-    /*
-     * Bullets
-     */
-
+function drawBullets() {
     for (const b of bullets) {
+        ctx.fillStyle = "#fff5a0";
 
-        ctx.fillStyle =
-            "#fff5a0";
-
-        ctx.shadowBlur = 10;
-
-        ctx.shadowColor =
-            "#fff";
+        ctx.shadowBlur = 12;
+        ctx.shadowColor = "#fff";
 
         ctx.beginPath();
 
@@ -949,200 +1446,133 @@ function draw() {
 
         ctx.shadowBlur = 0;
     }
-
-
-    /*
-     * Soldiers
-     */
-
-    for (const e of enemies) {
-        drawSoldier(e);
-    }
-
-
-    /*
-     * Player
-     */
-
-    drawPlayer();
-
-
-    /*
-     * Damage flash
-     */
-
-    if (flash > 0) {
-
-        ctx.fillStyle =
-            "rgba(255,70,50,.10)";
-
-        ctx.fillRect(
-            0,
-            0,
-            W,
-            H
-        );
-
-        flash -= 0.016;
-    }
 }
 
+function drawEnemyBullets() {
+    for (const b of enemyBullets) {
+        ctx.fillStyle = "#ff554d";
 
-// =========================================================
-// SOLDIER
-// =========================================================
-
-function drawSoldier(e) {
-
-    ctx.save();
-
-    ctx.translate(
-        e.x,
-        e.y
-    );
-
-
-    /*
-     * Elite soldier
-     */
-
-    ctx.fillStyle =
-        e.hit > 0
-            ? "#ff766c"
-            : e.elite
-                ? "#8b5960"
-                : "#65705e";
-
-
-    ctx.fillRect(
-        -11,
-        -1,
-        22,
-        20
-    );
-
-
-    /*
-     * Head
-     */
-
-    ctx.fillStyle =
-        "#bca989";
-
-    ctx.beginPath();
-
-    ctx.arc(
-        0,
-        -12,
-        9,
-        0,
-        Math.PI * 2
-    );
-
-    ctx.fill();
-
-
-    /*
-     * Helmet
-     */
-
-    ctx.fillStyle =
-        "#283028";
-
-    ctx.fillRect(
-        -10,
-        -19,
-        20,
-        6
-    );
-
-
-    /*
-     * Weapon
-     */
-
-    ctx.strokeStyle =
-        "#c5d0c7";
-
-    ctx.lineWidth = 3;
-
-    ctx.beginPath();
-
-    ctx.moveTo(
-        8,
-        5
-    );
-
-    ctx.lineTo(
-        25,
-        9
-    );
-
-    ctx.stroke();
-
-
-    /*
-     * Elite marker
-     */
-
-    if (e.elite) {
-
-        ctx.fillStyle =
-            "#ffcc45";
+        ctx.shadowBlur = 10;
+        ctx.shadowColor = "#ff554d";
 
         ctx.beginPath();
 
         ctx.arc(
-            0,
-            -27,
-            3,
+            b.x,
+            b.y,
+            5,
             0,
             Math.PI * 2
         );
 
         ctx.fill();
+
+        ctx.shadowBlur = 0;
     }
-
-
-    ctx.restore();
 }
 
+/* =========================================================
+   PICKUPS DRAW
+   ========================================================= */
 
-// =========================================================
-// PLAYER
-// =========================================================
+function drawPickups() {
+    for (const p of pickups) {
+        ctx.save();
 
-function drawPlayer() {
+        ctx.translate(
+            p.x,
+            p.y
+        );
 
-    ctx.save();
-
-    ctx.translate(
-        player.x,
-        player.y
-    );
-
-    ctx.rotate(
-        player.angle
-    );
-
-
-    /*
-     * Shield circle
-     */
-
-    if (player.armor > 0) {
-
-        ctx.strokeStyle =
-            "rgba(80,190,255,.55)";
-
-        ctx.lineWidth = 3;
+        ctx.fillStyle =
+            p.type === "medkit"
+                ? "#45ff87"
+                : "#5bbcff";
 
         ctx.beginPath();
 
         ctx.arc(
             0,
             0,
-            24,
+            12,
+            0,
+            Math.PI * 2
+        );
+
+        ctx.fill();
+
+        ctx.fillStyle = "#07100b";
+
+        ctx.font =
+            "bold 14px Arial";
+
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+
+        ctx.fillText(
+            p.type === "medkit"
+                ? "+"
+                : "A",
+            0,
+            1
+        );
+
+        ctx.restore();
+    }
+}
+
+/* =========================================================
+   PARTICLES DRAW
+   ========================================================= */
+
+function drawParticles() {
+    for (const p of particles) {
+        ctx.globalAlpha =
+            Math.max(
+                0,
+                Math.min(1, p.life * 2)
+            );
+
+        ctx.fillStyle =
+            p.color || "#ffd166";
+
+        ctx.fillRect(
+            p.x - 2,
+            p.y - 2,
+            4,
+            4
+        );
+    }
+
+    ctx.globalAlpha = 1;
+}
+
+/* =========================================================
+   EXPLOSIONS
+   ========================================================= */
+
+function drawExplosions() {
+    for (const e of explosions) {
+        const progress =
+            1 -
+            e.timer / e.max;
+
+        ctx.globalAlpha =
+            Math.max(
+                0,
+                1 - progress
+            );
+
+        ctx.strokeStyle = "#ffb347";
+
+        ctx.lineWidth = 5;
+
+        ctx.beginPath();
+
+        ctx.arc(
+            e.x,
+            e.y,
+            e.radius * progress,
             0,
             Math.PI * 2
         );
@@ -1150,243 +1580,73 @@ function drawPlayer() {
         ctx.stroke();
     }
 
-
-    /*
-     * Body
-     */
-
-    ctx.fillStyle =
-        "#55f5c3";
-
-    ctx.beginPath();
-
-    ctx.arc(
-        0,
-        0,
-        18,
-        0,
-        Math.PI * 2
-    );
-
-    ctx.fill();
-
-
-    /*
-     * Helmet
-     */
-
-    ctx.fillStyle =
-        "#0b2a20";
-
-    ctx.beginPath();
-
-    ctx.ellipse(
-        3,
-        -5,
-        11,
-        7,
-        0,
-        0,
-        Math.PI * 2
-    );
-
-    ctx.fill();
-
-
-    /*
-     * Visor
-     */
-
-    ctx.fillStyle =
-        "#d9fff3";
-
-    ctx.beginPath();
-
-    ctx.ellipse(
-        5,
-        -6,
-        6,
-        3,
-        0,
-        0,
-        Math.PI * 2
-    );
-
-    ctx.fill();
-
-
-    /*
-     * Gun
-     */
-
-    ctx.fillStyle =
-        "#b9fff0";
-
-    ctx.fillRect(
-        12,
-        -3,
-        20,
-        6
-    );
-
-
-    ctx.restore();
+    ctx.globalAlpha = 1;
 }
 
+/* =========================================================
+   GAME OVER
+   ========================================================= */
 
-// =========================================================
-// GAME LOOP
-// =========================================================
+function endGame() {
+    running = false;
 
-function loop(t) {
+    saveProgress();
 
-    if (!running) {
-
-        draw();
-
-        return;
+    if (finalText) {
+        finalText.textContent =
+            `You survived to wave ${wave} ` +
+            `and defeated ${kills} soldiers. ` +
+            `Coins: ${coins}`;
     }
 
+    if (gameover) {
+        gameover.classList.remove(
+            "hidden"
+        );
+    }
+}
+
+/* =========================================================
+   MAIN LOOP
+   ========================================================= */
+
+function loop(time) {
+    if (!running) {
+        draw();
+        return;
+    }
 
     const dt =
         Math.min(
             0.033,
-            (t - last) / 1000
+            (time - last) / 1000
         );
 
-
-    last = t;
-
+    last = time;
 
     update(dt);
-
     draw();
 
-
-    requestAnimationFrame(
-        loop
-    );
+    requestAnimationFrame(loop);
 }
 
+/* =========================================================
+   JOYSTICK
+   ========================================================= */
 
-// =========================================================
-// HUD
-// =========================================================
+function joystickPosition(ev) {
+    if (!joyEl) return;
 
-function updateHud() {
-
-    hpEl.textContent =
-        Math.max(
-            0,
-            Math.ceil(player.hp)
-        );
-
-    coinsEl.textContent =
-        coins;
-
-    levelEl.textContent =
-        level;
-
-    waveEl.textContent =
-        wave;
-
-    enemiesEl.textContent =
-        enemies.length;
-
-
-    const hpPercent =
-        Math.max(
-            0,
-            Math.min(
-                100,
-                (player.hp /
-                    player.maxHp) *
-                    100
-            )
-        );
-
-
-    hpFill.style.width =
-        hpPercent + "%";
-
-
-    if (player.hp < 60) {
-
-        hpFill.style.background =
-            "#ff554d";
-
-    } else if (player.hp < 130) {
-
-        hpFill.style.background =
-            "#ffd34e";
-
-    } else {
-
-        hpFill.style.background =
-            "#37e879";
-    }
-}
-
-
-// =========================================================
-// BUTTONS
-// =========================================================
-
-document
-    .getElementById("startBtn")
-    .onclick = reset;
-
-
-document
-    .getElementById("restartBtn")
-    .onclick = reset;
-
-
-document
-    .getElementById("fullscreenBtn")
-    .onclick = async () => {
-
-        try {
-
-            if (!document.fullscreenElement) {
-
-                await document
-                    .documentElement
-                    .requestFullscreen();
-
-            } else {
-
-                await document
-                    .exitFullscreen();
-            }
-
-        } catch (e) {
-
-            console.log(
-                "Fullscreen error:",
-                e
-            );
-        }
-    };
-
-
-// =========================================================
-// JOYSTICK
-// =========================================================
-
-function joyPos(ev) {
-
-    const r =
+    const rect =
         joyEl.getBoundingClientRect();
 
     const cx =
-        r.left +
-        r.width / 2;
+        rect.left +
+        rect.width / 2;
 
     const cy =
-        r.top +
-        r.height / 2;
-
+        rect.top +
+        rect.height / 2;
 
     let x =
         ev.clientX - cx;
@@ -1394,221 +1654,289 @@ function joyPos(ev) {
     let y =
         ev.clientY - cy;
 
-
     const max = 43;
 
-    const d =
+    const distance =
         Math.hypot(x, y);
 
-
-    if (d > max) {
-
+    if (distance > max) {
         x =
-            (x / d) *
+            (x / distance) *
             max;
 
         y =
-            (y / d) *
+            (y / distance) *
             max;
     }
 
-
-    joy.x =
+    joystick.x =
         x / max;
 
-    joy.y =
+    joystick.y =
         y / max;
 
-
-    stick.style.transform =
-        `translate(${x}px, ${y}px)`;
+    if (stick) {
+        stick.style.transform =
+            `translate(${x}px, ${y}px)`;
+    }
 }
 
+function joystickEnd() {
+    joystick.active = false;
 
-joyEl.addEventListener(
-    "pointerdown",
-    e => {
+    joystick.x = 0;
+    joystick.y = 0;
 
-        joy.active = true;
-
-        joy.id =
-            e.pointerId;
-
-        joyPos(e);
-
-        joyEl.setPointerCapture(
-            e.pointerId
-        );
+    if (stick) {
+        stick.style.transform =
+            "translate(0,0)";
     }
-);
+}
 
+if (joyEl) {
+    joyEl.addEventListener(
+        "pointerdown",
+        ev => {
+            joystick.active = true;
+            joystick.id =
+                ev.pointerId;
 
-joyEl.addEventListener(
-    "pointermove",
-    e => {
+            joystickPosition(ev);
 
-        if (joy.active) {
-            joyPos(e);
+            try {
+                joyEl.setPointerCapture(
+                    ev.pointerId
+                );
+            } catch (e) {}
         }
-    }
-);
+    );
 
+    joyEl.addEventListener(
+        "pointermove",
+        ev => {
+            if (joystick.active) {
+                joystickPosition(ev);
+            }
+        }
+    );
 
-function joyEnd() {
+    joyEl.addEventListener(
+        "pointerup",
+        joystickEnd
+    );
 
-    joy.active = false;
-
-    joy.x = 0;
-    joy.y = 0;
-
-    stick.style.transform =
-        "translate(0,0)";
+    joyEl.addEventListener(
+        "pointercancel",
+        joystickEnd
+    );
 }
 
+/* =========================================================
+   FIRE BUTTON
+   ========================================================= */
 
-joyEl.addEventListener(
-    "pointerup",
-    joyEnd
-);
+if (fireBtn) {
+    fireBtn.addEventListener(
+        "pointerdown",
+        ev => {
+            keys.fire = true;
 
-joyEl.addEventListener(
-    "pointercancel",
-    joyEnd
-);
+            shoot();
 
+            try {
+                fireBtn.setPointerCapture(
+                    ev.pointerId
+                );
+            } catch (e) {}
+        }
+    );
 
-// =========================================================
-// FIRE BUTTON
-// =========================================================
+    fireBtn.addEventListener(
+        "pointerup",
+        () => {
+            keys.fire = false;
+        }
+    );
 
-const fire =
-    document.getElementById("fire");
+    fireBtn.addEventListener(
+        "pointercancel",
+        () => {
+            keys.fire = false;
+        }
+    );
+}
 
+/* =========================================================
+   KEYBOARD
+   ========================================================= */
 
-fire.addEventListener(
-    "pointerdown",
-    e => {
-
-        keys.fire = true;
-
-        shoot();
-
-        fire.setPointerCapture(
-            e.pointerId
-        );
-    }
-);
-
-
-fire.addEventListener(
-    "pointerup",
-    () => {
-        keys.fire = false;
-    }
-);
-
-
-fire.addEventListener(
-    "pointercancel",
-    () => {
-        keys.fire = false;
-    }
-);
-
-
-// =========================================================
-// KEYBOARD
-// =========================================================
-
-addEventListener(
+window.addEventListener(
     "keydown",
-    e => {
-
+    ev => {
         if (
-            e.key === "w" ||
-            e.key === "ArrowUp"
+            ev.key === "w" ||
+            ev.key === "ArrowUp"
         ) {
             keys.up = true;
         }
 
-
         if (
-            e.key === "s" ||
-            e.key === "ArrowDown"
+            ev.key === "s" ||
+            ev.key === "ArrowDown"
         ) {
             keys.down = true;
         }
 
-
         if (
-            e.key === "a" ||
-            e.key === "ArrowLeft"
+            ev.key === "a" ||
+            ev.key === "ArrowLeft"
         ) {
             keys.left = true;
         }
 
-
         if (
-            e.key === "d" ||
-            e.key === "ArrowRight"
+            ev.key === "d" ||
+            ev.key === "ArrowRight"
         ) {
             keys.right = true;
         }
 
-
-        if (e.code === "Space") {
+        if (ev.code === "Space") {
             keys.fire = true;
+            shoot();
+        }
+
+        if (
+            ev.key === "r" ||
+            ev.key === "R"
+        ) {
+            reload();
+        }
+
+        if (
+            ev.key === "g" ||
+            ev.key === "G"
+        ) {
+            throwGrenade();
+        }
+
+        if (
+            ev.key === "h" ||
+            ev.key === "H"
+        ) {
+            useMedkit();
         }
     }
 );
 
-
-addEventListener(
+window.addEventListener(
     "keyup",
-    e => {
-
+    ev => {
         if (
-            e.key === "w" ||
-            e.key === "ArrowUp"
+            ev.key === "w" ||
+            ev.key === "ArrowUp"
         ) {
             keys.up = false;
         }
 
-
         if (
-            e.key === "s" ||
-            e.key === "ArrowDown"
+            ev.key === "s" ||
+            ev.key === "ArrowDown"
         ) {
             keys.down = false;
         }
 
-
         if (
-            e.key === "a" ||
-            e.key === "ArrowLeft"
+            ev.key === "a" ||
+            ev.key === "ArrowLeft"
         ) {
             keys.left = false;
         }
 
-
         if (
-            e.key === "d" ||
-            e.key === "ArrowRight"
+            ev.key === "d" ||
+            ev.key === "ArrowRight"
         ) {
             keys.right = false;
         }
 
-
-        if (e.code === "Space") {
+        if (ev.code === "Space") {
             keys.fire = false;
         }
     }
 );
 
+/* =========================================================
+   BUTTONS
+   ========================================================= */
 
-// =========================================================
-// INITIAL STATE
-// =========================================================
+if (startBtn) {
+    startBtn.onclick = resetGame;
+}
+
+if (restartBtn) {
+    restartBtn.onclick = resetGame;
+}
+
+if (fullscreenBtn) {
+    fullscreenBtn.onclick =
+        async () => {
+            try {
+                if (
+                    !document.fullscreenElement
+                ) {
+                    await document.documentElement
+                        .requestFullscreen();
+                } else {
+                    await document.exitFullscreen();
+                }
+            } catch (e) {}
+        };
+}
+
+/* =========================================================
+   OPTIONAL TOUCH BUTTONS
+   ========================================================= */
+
+const grenadeBtn =
+    document.getElementById(
+        "grenade"
+    );
+
+const medkitBtn =
+    document.getElementById(
+        "medkit"
+    );
+
+const reloadBtn =
+    document.getElementById(
+        "reload"
+    );
+
+if (grenadeBtn) {
+    grenadeBtn.addEventListener(
+        "click",
+        throwGrenade
+    );
+}
+
+if (medkitBtn) {
+    medkitBtn.addEventListener(
+        "click",
+        useMedkit
+    );
+}
+
+if (reloadBtn) {
+    reloadBtn.addEventListener(
+        "click",
+        reload
+    );
+}
+
+/* =========================================================
+   START
+   ========================================================= */
 
 updateHud();
 draw();
