@@ -1,3 +1,5 @@
+"use strict";
+
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
 
@@ -11,25 +13,31 @@ const message = document.getElementById("message");
 const gameover = document.getElementById("gameover");
 const finalText = document.getElementById("finalText");
 
-let W = innerWidth;
-let H = innerHeight;
+let W = window.innerWidth;
+let H = window.innerHeight;
 let dpr = 1;
 
 function resize() {
-    dpr = Math.min(devicePixelRatio || 1, 2);
-    W = innerWidth;
-    H = innerHeight;
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
 
-    canvas.width = W * dpr;
-    canvas.height = H * dpr;
+    W = window.innerWidth;
+    H = window.innerHeight;
+
+    canvas.width = Math.floor(W * dpr);
+    canvas.height = Math.floor(H * dpr);
+
     canvas.style.width = W + "px";
     canvas.style.height = H + "px";
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 
-addEventListener("resize", resize);
+window.addEventListener("resize", resize);
 resize();
+
+/* =========================
+   INPUT
+========================= */
 
 const keys = {
     up: false,
@@ -39,12 +47,15 @@ const keys = {
     fire: false
 };
 
+/* =========================
+   GAME STATE
+========================= */
+
 let running = false;
 let last = 0;
 
 let spawnTimer = 0;
 let shotTimer = 0;
-let bossTimer = 0;
 let waveTimer = 0;
 
 let flash = 0;
@@ -57,23 +68,26 @@ let level = 1;
 let xp = 0;
 let score = 0;
 
+let missionKills = 0;
+
 let enemies = [];
 let bullets = [];
 let enemyBullets = [];
 let particles = [];
 let pickups = [];
 
-let missionKills = 0;
-let missionCoins = 0;
-
 let weaponIndex = 0;
+
+/* =========================
+   WEAPONS
+========================= */
 
 const weapons = [
     {
         name: "PISTOL",
         damage: 3,
-        fireRate: 0.18,
-        speed: 700,
+        fireRate: 0.20,
+        speed: 720,
         ammo: Infinity,
         spread: 0,
         color: "#fff59d"
@@ -81,41 +95,49 @@ const weapons = [
     {
         name: "RIFLE",
         damage: 4,
-        fireRate: 0.10,
-        speed: 850,
-        ammo: 200,
-        spread: 0.035,
+        fireRate: 0.11,
+        speed: 900,
+        ammo: 180,
+        spread: 0.025,
         color: "#6dffb0"
     },
     {
         name: "SHOTGUN",
-        damage: 6,
-        fireRate: 0.58,
-        speed: 620,
+        damage: 5,
+        fireRate: 0.60,
+        speed: 650,
         ammo: 60,
-        spread: 0.18,
+        spread: 0.17,
         color: "#ffb35c"
     }
 ];
 
-let player = {
+/* =========================
+   PLAYER
+========================= */
+
+const player = {
     x: W / 2,
     y: H / 2,
-    r: 18,
 
-    // Increased starting survival
-    hp: 150,
-    maxHp: 150,
+    r: 19,
 
-    armor: 100,
-    maxArmor: 100,
+    hp: 100,
+    maxHp: 100,
 
-    speed: 245,
+    armor: 75,
+    maxArmor: 75,
+
+    speed: 250,
+
     angle: -Math.PI / 2,
 
-    // Small temporary invulnerability after taking damage
-    invulnerable: 0
+    damageCooldown: 0
 };
+
+/* =========================
+   JOYSTICK
+========================= */
 
 const joy = {
     active: false,
@@ -127,31 +149,49 @@ const joy = {
 const stick = document.getElementById("stick");
 const joyEl = document.getElementById("joystick");
 
+/* =========================
+   SAVE SYSTEM
+========================= */
+
 function loadSave() {
     try {
-        const save = JSON.parse(
-            localStorage.getItem("AREA51_WAR_V3")
-        );
+        const raw = localStorage.getItem("AREA51_WAR_V3");
 
-        if (!save) return;
+        if (!raw) {
+            return;
+        }
 
-        coins = Number(save.coins || 100);
-        level = Number(save.level || 1);
-        xp = Number(save.xp || 0);
-        kills = Number(save.kills || 0);
-        score = Number(save.score || 0);
+        const save = JSON.parse(raw);
 
-        player.maxHp = Math.max(
-            150,
-            Number(save.maxHp || 150)
-        );
+        coins = Number.isFinite(save.coins)
+            ? save.coins
+            : 100;
 
-        player.maxArmor = Math.max(
-            100,
-            Number(save.maxArmor || 100)
-        );
-    } catch (e) {
-        console.log("Save load failed");
+        level = Number.isFinite(save.level)
+            ? save.level
+            : 1;
+
+        xp = Number.isFinite(save.xp)
+            ? save.xp
+            : 0;
+
+        kills = Number.isFinite(save.kills)
+            ? save.kills
+            : 0;
+
+        score = Number.isFinite(save.score)
+            ? save.score
+            : 0;
+
+        player.maxHp = Number.isFinite(save.maxHp)
+            ? save.maxHp
+            : 100;
+
+        player.maxArmor = Number.isFinite(save.maxArmor)
+            ? save.maxArmor
+            : 75;
+    } catch (err) {
+        console.log("Save load failed:", err);
     }
 }
 
@@ -169,10 +209,39 @@ function saveGame() {
                 maxArmor: player.maxArmor
             })
         );
-    } catch (e) {
-        console.log("Save failed");
+    } catch (err) {
+        console.log("Save failed:", err);
     }
 }
+
+/* =========================
+   MESSAGE
+========================= */
+
+let messageTimer = null;
+
+function showMessage(text) {
+    if (!message) {
+        return;
+    }
+
+    message.textContent = text;
+    message.classList.remove("hidden");
+
+    if (messageTimer) {
+        clearTimeout(messageTimer);
+    }
+
+    messageTimer = setTimeout(() => {
+        if (message) {
+            message.classList.add("hidden");
+        }
+    }, 1600);
+}
+
+/* =========================
+   START / RESET
+========================= */
 
 function reset() {
     loadSave();
@@ -184,7 +253,7 @@ function reset() {
     player.armor = player.maxArmor;
 
     player.angle = -Math.PI / 2;
-    player.invulnerable = 2;
+    player.damageCooldown = 0;
 
     enemies = [];
     bullets = [];
@@ -194,22 +263,21 @@ function reset() {
 
     wave = 1;
 
-    spawnTimer = 2.0;
+    spawnTimer = 0.5;
     shotTimer = 0;
-    bossTimer = 0;
     waveTimer = 0;
 
     missionKills = 0;
-    missionCoins = 0;
 
     running = true;
 
-    message.classList.add("hidden");
-    gameover.classList.add("hidden");
+    if (message) {
+        message.classList.add("hidden");
+    }
 
-    showMessage(
-        "🛡️ AREA 51 WAR ZONE\nSURVIVAL MODE"
-    );
+    if (gameover) {
+        gameover.classList.add("hidden");
+    }
 
     last = performance.now();
 
@@ -217,6 +285,10 @@ function reset() {
 
     requestAnimationFrame(loop);
 }
+
+/* =========================
+   LEVEL SYSTEM
+========================= */
 
 function gainXP(amount) {
     xp += amount;
@@ -227,8 +299,8 @@ function gainXP(amount) {
         xp -= needed;
         level++;
 
-        player.maxHp += 15;
-        player.maxArmor += 10;
+        player.maxHp += 12;
+        player.maxArmor += 8;
 
         player.hp = player.maxHp;
         player.armor = player.maxArmor;
@@ -236,7 +308,9 @@ function gainXP(amount) {
         coins += 50;
 
         showMessage(
-            `⭐ LEVEL UP!\nLEVEL ${level}\n+15 HP\n+10 ARMOR\n+50 COINS`
+            "⭐ LEVEL UP!\nLEVEL " +
+            level +
+            "\n+HP +ARMOR +50 COINS"
         );
 
         needed = 100 + level * 50;
@@ -245,57 +319,45 @@ function gainXP(amount) {
     saveGame();
 }
 
-function showMessage(text) {
-    if (!message) return;
+/* =========================
+   ENEMY SPAWN
+========================= */
 
-    message.textContent = text;
-    message.classList.remove("hidden");
-
-    clearTimeout(showMessage.timer);
-
-    showMessage.timer = setTimeout(() => {
-        message.classList.add("hidden");
-    }, 1800);
-}
-
-/*
- * Difficulty scaling.
- * Early waves are intentionally easier.
- */
-function difficulty() {
-    if (wave <= 2) return 0.55;
-    if (wave <= 4) return 0.70;
-    if (wave <= 6) return 0.85;
-    return Math.min(1.35, 0.85 + (wave - 6) * 0.06);
-}
-
-function spawnEnemy() {
+function randomSpawnPosition(distance) {
     const side = Math.floor(Math.random() * 4);
-    const pad = 60;
 
     let x;
     let y;
 
     if (side === 0) {
-        x = -pad;
+        x = -distance;
         y = Math.random() * H;
     } else if (side === 1) {
-        x = W + pad;
+        x = W + distance;
         y = Math.random() * H;
     } else if (side === 2) {
         x = Math.random() * W;
-        y = -pad;
+        y = -distance;
     } else {
         x = Math.random() * W;
-        y = H + pad;
+        y = H + distance;
     }
 
-    const roll = Math.random();
-    const diff = difficulty();
+    return { x, y };
+}
+
+function spawnEnemy() {
+    const pos = randomSpawnPosition(50);
+
+    /*
+     * Early waves are intentionally easy.
+     * Strong enemies appear later.
+     */
 
     let type = "soldier";
 
-    // Heavy enemies are delayed
+    const roll = Math.random();
+
     if (wave >= 4 && roll < 0.15) {
         type = "heavy";
     } else if (wave >= 3 && roll < 0.35) {
@@ -303,130 +365,97 @@ function spawnEnemy() {
     }
 
     if (type === "heavy") {
-        const hp = Math.round(
-            (12 + wave * 2) * diff
-        );
+        const hp = 12 + wave * 2;
 
         enemies.push({
-            type,
-            x,
-            y,
+            type: "heavy",
+            x: pos.x,
+            y: pos.y,
             r: 24,
-            hp: Math.max(8, hp),
-            maxHp: Math.max(8, hp),
-            speed: 35 + Math.min(20, wave * 1.5),
-            damage: Math.min(5 + wave * 0.4, 10),
-            shoot:
-                2.8 +
-                Math.random() * 1.5,
+            hp,
+            maxHp: hp,
+            speed: 42 + wave * 1.5,
+            damage: 5,
+            shoot: 2.5,
             hit: 0,
-            color: "#8d7777"
+            color: "#777b75"
         });
 
-    } else if (type === "runner") {
-        const hp = Math.round(
-            (3 + Math.floor(wave / 2)) * diff
-        );
-
-        enemies.push({
-            type,
-            x,
-            y,
-            r: 14,
-            hp: Math.max(2, hp),
-            maxHp: Math.max(2, hp),
-            speed:
-                90 +
-                Math.min(45, wave * 3),
-            damage: Math.min(
-                3 + wave * 0.25,
-                7
-            ),
-            shoot:
-                4 +
-                Math.random() * 2,
-            hit: 0,
-            color: "#d1b65c"
-        });
-
-    } else {
-        const hp = Math.round(
-            (3 + Math.floor(wave / 2)) * diff
-        );
-
-        enemies.push({
-            type,
-            x,
-            y,
-            r: 17,
-            hp: Math.max(2, hp),
-            maxHp: Math.max(2, hp),
-            speed:
-                48 +
-                Math.min(45, wave * 3),
-            damage: Math.min(
-                3 + wave * 0.25,
-                7
-            ),
-            shoot:
-                3 +
-                Math.random() * 2,
-            hit: 0,
-            color: "#65705e"
-        });
+        return;
     }
+
+    if (type === "runner") {
+        const hp = 3 + Math.floor(wave / 3);
+
+        enemies.push({
+            type: "runner",
+            x: pos.x,
+            y: pos.y,
+            r: 14,
+            hp,
+            maxHp: hp,
+            speed: 90 + wave * 2,
+            damage: 3,
+            shoot: 3.2,
+            hit: 0,
+            color: "#b9a34c"
+        });
+
+        return;
+    }
+
+    const hp = 4 + Math.floor(wave / 4);
+
+    enemies.push({
+        type: "soldier",
+        x: pos.x,
+        y: pos.y,
+        r: 17,
+        hp,
+        maxHp: hp,
+        speed: 48 + wave * 2,
+        damage: 3,
+        shoot: 2.5 + Math.random(),
+        hit: 0,
+        color: "#65705e"
+    });
 }
 
+/* =========================
+   BOSS
+========================= */
+
 function spawnBoss() {
-    const side = Math.floor(Math.random() * 4);
+    const pos = randomSpawnPosition(90);
 
-    let x;
-    let y;
-
-    if (side === 0) {
-        x = -90;
-        y = Math.random() * H;
-    } else if (side === 1) {
-        x = W + 90;
-        y = Math.random() * H;
-    } else if (side === 2) {
-        x = Math.random() * W;
-        y = -90;
-    } else {
-        x = Math.random() * W;
-        y = H + 90;
-    }
-
-    /*
-     * Boss HP is strong but its damage is deliberately controlled.
-     */
-    const hp =
-        140 +
-        Math.min(250, wave * 30);
+    const hp = 100 + wave * 25;
 
     enemies.push({
         type: "boss",
         boss: true,
-        x,
-        y,
+        x: pos.x,
+        y: pos.y,
         r: 42,
         hp,
         maxHp: hp,
-        speed: 28 + Math.min(15, wave),
-        damage: Math.min(
-            8 + wave * 0.35,
-            14
-        ),
-        shoot: 2.2,
+        speed: 30 + wave,
+        damage: 8,
+        shoot: 1.5,
         hit: 0,
-        color: "#b73e51"
+        color: "#a92f45"
     });
 
     showMessage("☠️ BOSS INCOMING!");
 }
 
+/* =========================
+   SHOOT
+========================= */
+
 function shoot() {
-    if (!running) return;
+    if (!running) {
+        return;
+    }
 
     const weapon = weapons[weaponIndex];
 
@@ -439,16 +468,18 @@ function shoot() {
     }
 
     const count =
-        weaponIndex === 2 ? 5 : 1;
+        weaponIndex === 2
+            ? 5
+            : 1;
 
     for (let i = 0; i < count; i++) {
         let angle = player.angle;
 
-        if (count > 1) {
+        if (count === 5) {
             angle +=
                 (i - 2) *
                 weapon.spread;
-        } else if (weapon.spread) {
+        } else if (weapon.spread > 0) {
             angle +=
                 (Math.random() - 0.5) *
                 weapon.spread;
@@ -457,11 +488,13 @@ function shoot() {
         bullets.push({
             x:
                 player.x +
-                Math.cos(angle) * 25,
+                Math.cos(angle) *
+                25,
 
             y:
                 player.y +
-                Math.sin(angle) * 25,
+                Math.sin(angle) *
+                25,
 
             vx:
                 Math.cos(angle) *
@@ -472,23 +505,24 @@ function shoot() {
                 weapon.speed,
 
             damage: weapon.damage,
-            life: 1.2,
+            life: 1.3,
             color: weapon.color
         });
     }
 
     if (weapon.ammo !== Infinity) {
-        weapon.ammo--;
+        weapon.ammo -= 1;
     }
 
     shotTimer = weapon.fireRate;
     flash = 0.04;
 }
 
+/* =========================
+   ENEMY SHOOT
+========================= */
+
 function enemyShoot(enemy) {
-    /*
-     * Enemies don't instantly punish the player.
-     */
     const angle = Math.atan2(
         player.y - enemy.y,
         player.x - enemy.x
@@ -498,37 +532,46 @@ function enemyShoot(enemy) {
         x: enemy.x,
         y: enemy.y,
 
-        vx:
-            Math.cos(angle) *
-            (enemy.boss ? 260 : 220),
+        vx: Math.cos(angle) * 250,
+        vy: Math.sin(angle) * 250,
 
-        vy:
-            Math.sin(angle) *
-            (enemy.boss ? 260 : 220),
+        damage: enemy.boss
+            ? 7
+            : enemy.damage,
 
-        damage: enemy.damage,
-        life: enemy.boss ? 2.5 : 2.2,
-        boss: enemy.boss
+        life: 3,
+
+        boss: !!enemy.boss
     });
 }
 
-function damagePlayer(amount) {
-    if (!running) return;
+/* =========================
+   PLAYER DAMAGE
+========================= */
 
-    /*
-     * Invulnerability prevents rapid repeated damage.
-     */
-    if (player.invulnerable > 0) {
+function damagePlayer(amount) {
+    if (!running) {
         return;
     }
 
     /*
-     * Armor absorbs 85% of incoming damage.
+     * Prevent instant repeated damage.
      */
+
+    if (player.damageCooldown > 0) {
+        return;
+    }
+
+    player.damageCooldown = 0.35;
+
+    /*
+     * Armor absorbs most damage.
+     */
+
     if (player.armor > 0) {
         const absorbed = Math.min(
             player.armor,
-            amount * 0.85
+            amount * 0.8
         );
 
         player.armor -= absorbed;
@@ -537,12 +580,7 @@ function damagePlayer(amount) {
 
     player.hp -= amount;
 
-    /*
-     * Short protection window.
-     */
-    player.invulnerable = 0.45;
-
-    flash = 0.10;
+    flash = 0.12;
     shake = 5;
 
     burst(
@@ -558,24 +596,49 @@ function damagePlayer(amount) {
     }
 }
 
+/* =========================
+   GAME OVER
+========================= */
+
 function endGame() {
     running = false;
 
     saveGame();
 
-    finalText.textContent =
-        `Wave ${wave} • ${kills} soldiers defeated • ` +
-        `${score} score • ${coins} coins`;
+    if (finalText) {
+        finalText.textContent =
+            "Wave " +
+            wave +
+            " • " +
+            kills +
+            " soldiers defeated • " +
+            score +
+            " score • " +
+            coins +
+            " coins";
+    }
 
-    gameover.classList.remove("hidden");
+    if (gameover) {
+        gameover.classList.remove("hidden");
+    }
 
     updateHud();
 }
 
+/* =========================
+   UPDATE
+========================= */
+
 function update(dt) {
-    if (player.invulnerable > 0) {
-        player.invulnerable -= dt;
+    player.damageCooldown -= dt;
+
+    if (player.damageCooldown < 0) {
+        player.damageCooldown = 0;
     }
+
+    /*
+     * Movement
+     */
 
     let dx =
         (keys.right ? 1 : 0) -
@@ -590,14 +653,14 @@ function update(dt) {
         dy = joy.y;
     }
 
-    const len = Math.hypot(dx, dy);
+    const moveLength = Math.hypot(dx, dy);
 
-    if (len > 1) {
-        dx /= len;
-        dy /= len;
+    if (moveLength > 1) {
+        dx /= moveLength;
+        dy /= moveLength;
     }
 
-    if (len > 0.08) {
+    if (moveLength > 0.08) {
         player.x +=
             dx *
             player.speed *
@@ -613,14 +676,18 @@ function update(dt) {
     }
 
     player.x = Math.max(
-        22,
-        Math.min(W - 22, player.x)
+        24,
+        Math.min(W - 24, player.x)
     );
 
     player.y = Math.max(
-        65,
-        Math.min(H - 22, player.y)
+        70,
+        Math.min(H - 24, player.y)
     );
+
+    /*
+     * Shooting
+     */
 
     shotTimer -= dt;
 
@@ -632,153 +699,157 @@ function update(dt) {
     }
 
     /*
-     * Slower enemy spawning at beginning.
+     * Spawn enemies.
      */
+
     spawnTimer -= dt;
 
-    const target = Math.min(
-        3 + Math.floor(wave * 0.9),
-        16
+    const targetEnemies = Math.min(
+        3 + Math.floor(wave * 0.8),
+        14
     );
 
     if (
         spawnTimer <= 0 &&
-        enemies.length < target
+        enemies.length < targetEnemies
     ) {
         spawnEnemy();
 
-        const spawnDelay =
-            wave <= 2
-                ? 1.8
-                : Math.max(
-                      0.45,
-                      1.35 -
-                          wave * 0.025
-                  );
-
-        spawnTimer = spawnDelay;
+        spawnTimer = Math.max(
+            0.45,
+            1.2 - wave * 0.025
+        );
     }
 
     /*
-     * Boss only from wave 5 onward.
+     * Boss every 5 waves.
      */
+
     if (
         wave >= 5 &&
         wave % 5 === 0 &&
-        !enemies.some(e => e.boss) &&
-        bossTimer <= 0 &&
-        enemies.length < 5
+        !enemies.some(
+            enemy => enemy.boss
+        )
     ) {
         spawnBoss();
-        bossTimer = 30;
     }
-
-    bossTimer -= dt;
 
     /*
      * Player bullets.
      */
-    for (const b of bullets) {
-        b.x += b.vx * dt;
-        b.y += b.vy * dt;
-        b.life -= dt;
+
+    for (const bullet of bullets) {
+        bullet.x +=
+            bullet.vx * dt;
+
+        bullet.y +=
+            bullet.vy * dt;
+
+        bullet.life -= dt;
     }
 
     bullets = bullets.filter(
-        b =>
-            b.life > 0 &&
-            b.x > -50 &&
-            b.x < W + 50 &&
-            b.y > -50 &&
-            b.y < H + 50
+        bullet =>
+            bullet.life > 0 &&
+            bullet.x > -60 &&
+            bullet.x < W + 60 &&
+            bullet.y > -60 &&
+            bullet.y < H + 60
     );
 
     /*
      * Enemy bullets.
      */
-    for (const b of enemyBullets) {
-        b.x += b.vx * dt;
-        b.y += b.vy * dt;
-        b.life -= dt;
+
+    for (const bullet of enemyBullets) {
+        bullet.x +=
+            bullet.vx * dt;
+
+        bullet.y +=
+            bullet.vy * dt;
+
+        bullet.life -= dt;
 
         if (
             Math.hypot(
-                player.x - b.x,
-                player.y - b.y
+                player.x - bullet.x,
+                player.y - bullet.y
             ) <
-            player.r + 6
+            player.r + 7
         ) {
-            damagePlayer(b.damage);
-            b.life = 0;
+            damagePlayer(
+                bullet.damage
+            );
+
+            bullet.life = 0;
         }
     }
 
     enemyBullets =
         enemyBullets.filter(
-            b =>
-                b.life > 0 &&
-                b.x > -80 &&
-                b.x < W + 80 &&
-                b.y > -80 &&
-                b.y < H + 80
+            bullet =>
+                bullet.life > 0 &&
+                bullet.x > -80 &&
+                bullet.x < W + 80 &&
+                bullet.y > -80 &&
+                bullet.y < H + 80
         );
 
     /*
      * Enemies.
      */
-    for (const e of enemies) {
+
+    for (const enemy of enemies) {
         const angle = Math.atan2(
-            player.y - e.y,
-            player.x - e.x
+            player.y - enemy.y,
+            player.x - enemy.x
         );
 
         const distance = Math.hypot(
-            player.x - e.x,
-            player.y - e.y
+            player.x - enemy.x,
+            player.y - enemy.y
         );
 
-        /*
-         * Keep enemies from instantly touching player.
-         */
         if (
             distance >
-            e.r + player.r + 12
+            enemy.r +
+            player.r +
+            10
         ) {
-            e.x +=
+            enemy.x +=
                 Math.cos(angle) *
-                e.speed *
+                enemy.speed *
                 dt;
 
-            e.y +=
+            enemy.y +=
                 Math.sin(angle) *
-                e.speed *
+                enemy.speed *
                 dt;
         }
 
-        e.shoot -= dt;
-        e.hit -= dt;
+        enemy.shoot -= dt;
+        enemy.hit -= dt;
 
         if (
-            e.shoot <= 0 &&
-            distance < 500
+            enemy.shoot <= 0 &&
+            distance < 480
         ) {
-            enemyShoot(e);
+            enemyShoot(enemy);
 
-            e.shoot = e.boss
-                ? 2.2
-                : 3.0 +
-                  Math.random() * 2.0;
+            enemy.shoot =
+                enemy.boss
+                    ? 1.1
+                    : 2.3 + Math.random();
         }
 
-        /*
-         * Contact damage is now much lower.
-         */
         if (
             distance <
-            e.r + player.r
+            enemy.r +
+            player.r
         ) {
             damagePlayer(
-                e.damage * dt
+                enemy.damage * dt
             );
         }
     }
@@ -786,43 +857,48 @@ function update(dt) {
     /*
      * Bullet collision.
      */
+
     for (
         let i = enemies.length - 1;
         i >= 0;
         i--
     ) {
-        const e = enemies[i];
+        const enemy = enemies[i];
 
         for (
             let j = bullets.length - 1;
             j >= 0;
             j--
         ) {
-            const b = bullets[j];
+            const bullet = bullets[j];
+
+            const distance = Math.hypot(
+                enemy.x - bullet.x,
+                enemy.y - bullet.y
+            );
 
             if (
-                Math.hypot(
-                    e.x - b.x,
-                    e.y - b.y
-                ) <
-                e.r + 6
+                distance <
+                enemy.r + 7
             ) {
-                e.hp -= b.damage;
-                e.hit = 0.08;
+                enemy.hp -=
+                    bullet.damage;
+
+                enemy.hit = 0.08;
 
                 bullets.splice(j, 1);
 
                 burst(
-                    e.x,
-                    e.y,
-                    4,
-                    e.boss
+                    enemy.x,
+                    enemy.y,
+                    enemy.boss ? 8 : 4,
+                    enemy.boss
                         ? "#ff4555"
                         : "#ffd66b"
                 );
 
-                if (e.hp <= 0) {
-                    killEnemy(e);
+                if (enemy.hp <= 0) {
+                    killEnemy(enemy);
                     enemies.splice(i, 1);
                 }
 
@@ -834,92 +910,74 @@ function update(dt) {
     /*
      * Pickups.
      */
-    for (const p of pickups) {
-        p.life -= dt;
+
+    for (const pickup of pickups) {
+        pickup.life -= dt;
+
+        const distance = Math.hypot(
+            player.x - pickup.x,
+            player.y - pickup.y
+        );
 
         if (
-            Math.hypot(
-                player.x - p.x,
-                player.y - p.y
-            ) <
-            player.r + 16
+            distance <
+            player.r +
+            pickup.r
         ) {
-            collectPickup(p);
-            p.life = 0;
+            collectPickup(pickup);
+            pickup.life = 0;
         }
     }
 
-    pickups = pickups.filter(
-        p => p.life > 0
-    );
+    pickups =
+        pickups.filter(
+            pickup =>
+                pickup.life > 0
+        );
 
     /*
      * Particles.
      */
-    for (const p of particles) {
-        p.x += p.vx * dt;
-        p.y += p.vy * dt;
-        p.life -= dt;
+
+    for (const particle of particles) {
+        particle.x +=
+            particle.vx * dt;
+
+        particle.y +=
+            particle.vy * dt;
+
+        particle.life -= dt;
     }
 
-    particles = particles.filter(
-        p => p.life > 0
-    );
-
-    /*
-     * Automatic healing every few seconds
-     * when the player is badly damaged.
-     */
-    waveTimer += dt;
-
-    if (
-        waveTimer >= 12 &&
-        player.hp > 0 &&
-        player.hp < player.maxHp * 0.45
-    ) {
-        player.hp = Math.min(
-            player.maxHp,
-            player.hp + 5
+    particles =
+        particles.filter(
+            particle =>
+                particle.life > 0
         );
 
-        waveTimer = 0;
-    }
-
     /*
-     * Wave progression.
+     * Wave timer.
      *
-     * Every 8 kills + cleared battlefield.
+     * This avoids the old bug where
+     * the game could remain stuck.
      */
+
+    waveTimer -= dt;
+
     if (
-        kills > 0 &&
-        kills % 8 === 0 &&
-        enemies.length === 0
+        enemies.length === 0 &&
+        waveTimer <= 0
     ) {
         wave++;
 
-        spawnTimer = 2;
+        waveTimer = 1.5;
 
-        /*
-         * Reward between waves.
-         */
-        coins += 30;
-
-        /*
-         * Restore some HP and armor
-         * after clearing a wave.
-         */
-        player.hp = Math.min(
-            player.maxHp,
-            player.hp + 25
-        );
-
-        player.armor = Math.min(
-            player.maxArmor,
-            player.armor + 20
-        );
+        coins += 25;
 
         showMessage(
-            `🌊 WAVE ${wave}\n+30 COINS\n❤️ +25 HP\n🛡️ +20 ARMOR`
+            "🌊 WAVE " +
+            wave +
+            "\n+25 COINS"
         );
 
         saveGame();
@@ -928,24 +986,28 @@ function update(dt) {
     updateHud();
 }
 
-function killEnemy(e) {
+/* =========================
+   KILL ENEMY
+========================= */
+
+function killEnemy(enemy) {
     kills++;
     missionKills++;
 
     let reward = 8;
     let xpReward = 10;
 
-    if (e.type === "runner") {
+    if (enemy.type === "runner") {
         reward = 10;
         xpReward = 12;
     }
 
-    if (e.type === "heavy") {
+    if (enemy.type === "heavy") {
         reward = 20;
         xpReward = 25;
     }
 
-    if (e.boss) {
+    if (enemy.boss) {
         reward = 150;
         xpReward = 100;
 
@@ -955,36 +1017,29 @@ function killEnemy(e) {
     }
 
     coins += reward;
-    missionCoins += reward;
-
     score += reward * 10;
 
     gainXP(xpReward);
 
-    /*
-     * Better pickup chance.
-     */
-    if (Math.random() < 0.38) {
+    if (Math.random() < 0.35) {
         spawnPickup(
-            e.x,
-            e.y
+            enemy.x,
+            enemy.y
         );
     }
 
     burst(
-        e.x,
-        e.y,
-        e.boss ? 30 : 12,
-        e.boss
+        enemy.x,
+        enemy.y,
+        enemy.boss ? 30 : 12,
+        enemy.boss
             ? "#ff355d"
             : "#ffd66b"
     );
 
-    if (
-        missionKills >= 25
-    ) {
-        coins += 100;
+    if (missionKills >= 25) {
         missionKills = 0;
+        coins += 100;
 
         showMessage(
             "🏆 MISSION COMPLETE!\n+100 COINS"
@@ -994,6 +1049,10 @@ function killEnemy(e) {
     saveGame();
 }
 
+/* =========================
+   PICKUPS
+========================= */
+
 function spawnPickup(x, y) {
     const types = [
         "health",
@@ -1002,57 +1061,56 @@ function spawnPickup(x, y) {
         "coins"
     ];
 
+    const type =
+        types[
+            Math.floor(
+                Math.random() *
+                types.length
+            )
+        ];
+
     pickups.push({
         x,
         y,
-        type:
-            types[
-                Math.floor(
-                    Math.random() *
-                    types.length
-                )
-            ],
-        r: 12,
+        type,
+        r: 13,
         life: 15
     });
 }
 
-function collectPickup(p) {
-    if (p.type === "health") {
+function collectPickup(pickup) {
+    if (pickup.type === "health") {
         player.hp = Math.min(
             player.maxHp,
-            player.hp + 40
+            player.hp + 30
         );
 
         showMessage(
-            "❤️ +40 HEALTH"
+            "❤️ +30 HEALTH"
         );
     }
 
-    if (p.type === "armor") {
+    if (pickup.type === "armor") {
         player.armor = Math.min(
             player.maxArmor,
-            player.armor + 35
+            player.armor + 25
         );
 
         showMessage(
-            "🛡️ +35 ARMOR"
+            "🛡️ +25 ARMOR"
         );
     }
 
-    if (p.type === "ammo") {
-        for (const w of weapons) {
-            if (w.ammo !== Infinity) {
-                w.ammo += 35;
-            }
-        }
+    if (pickup.type === "ammo") {
+        weapons[1].ammo += 40;
+        weapons[2].ammo += 15;
 
         showMessage(
-            "🔫 AMMO RESTORED"
+            "🔫 AMMO +"
         );
     }
 
-    if (p.type === "coins") {
+    if (pickup.type === "coins") {
         coins += 30;
 
         showMessage(
@@ -1063,19 +1121,23 @@ function collectPickup(p) {
     saveGame();
 }
 
+/* =========================
+   PARTICLES
+========================= */
+
 function burst(
     x,
     y,
-    n,
+    count,
     color
 ) {
-    for (let i = 0; i < n; i++) {
-        const a =
+    for (let i = 0; i < count; i++) {
+        const angle =
             Math.random() *
             Math.PI *
             2;
 
-        const s =
+        const speed =
             35 +
             Math.random() *
             150;
@@ -1083,19 +1145,30 @@ function burst(
         particles.push({
             x,
             y,
+
             vx:
-                Math.cos(a) * s,
+                Math.cos(angle) *
+                speed,
+
             vy:
-                Math.sin(a) * s,
+                Math.sin(angle) *
+                speed,
+
             life:
                 0.25 +
-                Math.random() * 0.45,
+                Math.random() *
+                0.4,
+
             color:
                 color ||
                 "#ffd66b"
         });
     }
 }
+
+/* =========================
+   DRAW
+========================= */
 
 function draw() {
     ctx.save();
@@ -1104,6 +1177,7 @@ function draw() {
         ctx.translate(
             (Math.random() - 0.5) *
                 shake,
+
             (Math.random() - 0.5) *
                 shake
         );
@@ -1123,10 +1197,10 @@ function draw() {
     );
 
     /*
-     * Battlefield.
+     * Background
      */
-    ctx.fillStyle =
-        "#07100b";
+
+    ctx.fillStyle = "#07100b";
 
     ctx.fillRect(
         0,
@@ -1134,6 +1208,10 @@ function draw() {
         W,
         H
     );
+
+    /*
+     * Grid
+     */
 
     ctx.strokeStyle =
         "rgba(80,160,120,.10)";
@@ -1163,14 +1241,14 @@ function draw() {
     }
 
     /*
-     * Buildings.
+     * Buildings
      */
-    ctx.fillStyle =
-        "#101a16";
+
+    ctx.fillStyle = "#101a16";
 
     ctx.fillRect(
         W * 0.18,
-        H * 0.2,
+        H * 0.20,
         90,
         55
     );
@@ -1182,12 +1260,11 @@ function draw() {
         60
     );
 
-    ctx.strokeStyle =
-        "#25483a";
+    ctx.strokeStyle = "#25483a";
 
     ctx.strokeRect(
         W * 0.18,
-        H * 0.2,
+        H * 0.20,
         90,
         55
     );
@@ -1200,97 +1277,30 @@ function draw() {
     );
 
     /*
-     * Pickups.
+     * Pickups
      */
-    for (const p of pickups) {
-        ctx.save();
 
-        ctx.translate(
-            p.x,
-            p.y
-        );
-
-        ctx.beginPath();
-
-        ctx.arc(
-            0,
-            0,
-            p.r,
-            0,
-            Math.PI * 2
-        );
-
-        if (
-            p.type === "health"
-        ) {
-            ctx.fillStyle =
-                "#ff4f64";
-        } else if (
-            p.type === "armor"
-        ) {
-            ctx.fillStyle =
-                "#5bb8ff";
-        } else if (
-            p.type === "ammo"
-        ) {
-            ctx.fillStyle =
-                "#ffd34e";
-        } else {
-            ctx.fillStyle =
-                "#55f5c3";
-        }
-
-        ctx.shadowBlur = 15;
-        ctx.shadowColor =
-            ctx.fillStyle;
-
-        ctx.fill();
-
-        ctx.shadowBlur = 0;
-
-        ctx.fillStyle =
-            "#07100b";
-
-        ctx.font =
-            "bold 13px Arial";
-
-        ctx.textAlign =
-            "center";
-
-        ctx.textBaseline =
-            "middle";
-
-        ctx.fillText(
-            p.type === "health"
-                ? "+"
-                : p.type === "armor"
-                ? "S"
-                : p.type === "ammo"
-                ? "A"
-                : "$",
-            0,
-            0
-        );
-
-        ctx.restore();
+    for (const pickup of pickups) {
+        drawPickup(pickup);
     }
 
     /*
-     * Particles.
+     * Particles
      */
-    for (const p of particles) {
+
+    for (const particle of particles) {
         ctx.globalAlpha =
             Math.max(
                 0,
-                p.life * 2
+                particle.life * 2
             );
 
         ctx.fillStyle =
-            p.color;
+            particle.color;
 
         ctx.fillRect(
-            p.x - 2,
-            p.y - 2,
+            particle.x - 2,
+            particle.y - 2,
             4,
             4
         );
@@ -1299,21 +1309,22 @@ function draw() {
     ctx.globalAlpha = 1;
 
     /*
-     * Player bullets.
+     * Player bullets
      */
-    for (const b of bullets) {
+
+    for (const bullet of bullets) {
         ctx.fillStyle =
-            b.color;
+            bullet.color;
 
         ctx.shadowBlur = 12;
         ctx.shadowColor =
-            b.color;
+            bullet.color;
 
         ctx.beginPath();
 
         ctx.arc(
-            b.x,
-            b.y,
+            bullet.x,
+            bullet.y,
             4,
             0,
             Math.PI * 2
@@ -1325,11 +1336,12 @@ function draw() {
     }
 
     /*
-     * Enemy bullets.
+     * Enemy bullets
      */
-    for (const b of enemyBullets) {
+
+    for (const bullet of enemyBullets) {
         ctx.fillStyle =
-            b.boss
+            bullet.boss
                 ? "#ff3154"
                 : "#ffb45e";
 
@@ -1340,9 +1352,9 @@ function draw() {
         ctx.beginPath();
 
         ctx.arc(
-            b.x,
-            b.y,
-            b.boss ? 6 : 4,
+            bullet.x,
+            bullet.y,
+            bullet.boss ? 6 : 4,
             0,
             Math.PI * 2
         );
@@ -1353,17 +1365,19 @@ function draw() {
     }
 
     /*
-     * Enemies.
+     * Enemies
      */
-    for (const e of enemies) {
-        drawEnemy(e);
+
+    for (const enemy of enemies) {
+        drawEnemy(enemy);
     }
 
     drawPlayer();
 
     /*
-     * Damage flash.
+     * Damage flash
      */
+
     if (flash > 0) {
         ctx.fillStyle =
             "rgba(255,70,50,.12)";
@@ -1376,112 +1390,102 @@ function draw() {
         );
 
         flash -= 0.016;
+
+        if (flash < 0) {
+            flash = 0;
+        }
     }
 
     ctx.restore();
 }
 
-function drawEnemy(e) {
+/* =========================
+   DRAW PICKUP
+========================= */
+
+function drawPickup(pickup) {
     ctx.save();
 
     ctx.translate(
-        e.x,
-        e.y
+        pickup.x,
+        pickup.y
     );
 
-    /*
-     * Boss.
-     */
-    if (e.boss) {
-        ctx.fillStyle =
-            e.hit > 0
-                ? "#ff8b91"
-                : "#a92f45";
+    let color = "#55f5c3";
+    let symbol = "$";
 
-        ctx.beginPath();
+    if (pickup.type === "health") {
+        color = "#ff4f64";
+        symbol = "+";
+    } else if (
+        pickup.type === "armor"
+    ) {
+        color = "#5bb8ff";
+        symbol = "S";
+    } else if (
+        pickup.type === "ammo"
+    ) {
+        color = "#ffd34e";
+        symbol = "A";
+    }
 
-        ctx.arc(
-            0,
-            0,
-            e.r,
-            0,
-            Math.PI * 2
-        );
+    ctx.fillStyle = color;
 
-        ctx.fill();
+    ctx.shadowBlur = 15;
+    ctx.shadowColor = color;
 
-        ctx.strokeStyle =
-            "#ff526b";
+    ctx.beginPath();
 
-        ctx.lineWidth = 4;
-        ctx.stroke();
+    ctx.arc(
+        0,
+        0,
+        pickup.r,
+        0,
+        Math.PI * 2
+    );
 
-        ctx.fillStyle =
-            "#ffcf55";
+    ctx.fill();
 
-        ctx.beginPath();
+    ctx.shadowBlur = 0;
 
-        ctx.arc(
-            0,
-            -5,
-            15,
-            0,
-            Math.PI * 2
-        );
+    ctx.fillStyle = "#07100b";
 
-        ctx.fill();
+    ctx.font =
+        "bold 13px Arial";
 
-        ctx.fillStyle =
-            "#151515";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
 
-        ctx.fillRect(
-            -18,
-            -28,
-            36,
-            8
-        );
+    ctx.fillText(
+        symbol,
+        0,
+        0
+    );
 
-        /*
-         * Boss HP.
-         */
-        ctx.fillStyle =
-            "#270b10";
+    ctx.restore();
+}
 
-        ctx.fillRect(
-            -35,
-            -55,
-            70,
-            7
-        );
+/* =========================
+   DRAW ENEMY
+========================= */
 
-        ctx.fillStyle =
-            "#ff425b";
+function drawEnemy(enemy) {
+    ctx.save();
 
-        ctx.fillRect(
-            -35,
-            -55,
-            70 *
-                Math.max(
-                    0,
-                    e.hp /
-                        e.maxHp
-                ),
-            7
-        );
+    ctx.translate(
+        enemy.x,
+        enemy.y
+    );
 
+    if (enemy.boss) {
+        drawBoss(enemy);
         ctx.restore();
-
         return;
     }
 
-    /*
-     * Heavy.
-     */
-    if (
-        e.type === "heavy"
-    ) {
+    if (enemy.type === "heavy") {
         ctx.fillStyle =
-            e.hit > 0
+            enemy.hit > 0
                 ? "#ff766c"
                 : "#737c76";
 
@@ -1492,8 +1496,7 @@ function drawEnemy(e) {
             25
         );
 
-        ctx.fillStyle =
-            "#bca989";
+        ctx.fillStyle = "#bca989";
 
         ctx.beginPath();
 
@@ -1507,8 +1510,7 @@ function drawEnemy(e) {
 
         ctx.fill();
 
-        ctx.fillStyle =
-            "#303630";
+        ctx.fillStyle = "#303630";
 
         ctx.fillRect(
             -14,
@@ -1516,15 +1518,11 @@ function drawEnemy(e) {
             28,
             7
         );
-
     } else if (
-        e.type === "runner"
+        enemy.type === "runner"
     ) {
-        /*
-         * Runner.
-         */
         ctx.fillStyle =
-            e.hit > 0
+            enemy.hit > 0
                 ? "#ff766c"
                 : "#b9a34c";
 
@@ -1540,8 +1538,7 @@ function drawEnemy(e) {
 
         ctx.fill();
 
-        ctx.fillStyle =
-            "#222";
+        ctx.fillStyle = "#222";
 
         ctx.beginPath();
 
@@ -1554,13 +1551,9 @@ function drawEnemy(e) {
         );
 
         ctx.fill();
-
     } else {
-        /*
-         * Normal soldier.
-         */
         ctx.fillStyle =
-            e.hit > 0
+            enemy.hit > 0
                 ? "#ff766c"
                 : "#65705e";
 
@@ -1571,8 +1564,7 @@ function drawEnemy(e) {
             20
         );
 
-        ctx.fillStyle =
-            "#bca989";
+        ctx.fillStyle = "#bca989";
 
         ctx.beginPath();
 
@@ -1586,8 +1578,7 @@ function drawEnemy(e) {
 
         ctx.fill();
 
-        ctx.fillStyle =
-            "#283028";
+        ctx.fillStyle = "#283028";
 
         ctx.fillRect(
             -10,
@@ -1598,13 +1589,13 @@ function drawEnemy(e) {
     }
 
     /*
-     * Enemy weapon.
+     * Gun
      */
-    ctx.strokeStyle =
-        "#c5d0c7";
+
+    ctx.strokeStyle = "#c5d0c7";
 
     ctx.lineWidth =
-        e.type === "heavy"
+        enemy.type === "heavy"
             ? 5
             : 3;
 
@@ -1616,7 +1607,7 @@ function drawEnemy(e) {
     );
 
     ctx.lineTo(
-        e.type === "heavy"
+        enemy.type === "heavy"
             ? 30
             : 25,
         9
@@ -1625,10 +1616,12 @@ function drawEnemy(e) {
     ctx.stroke();
 
     /*
-     * Enemy HP bar.
+     * HP bar
      */
+
     if (
-        e.hp < e.maxHp
+        enemy.hp <
+        enemy.maxHp
     ) {
         ctx.fillStyle =
             "#270b10";
@@ -1649,8 +1642,8 @@ function drawEnemy(e) {
             36 *
                 Math.max(
                     0,
-                    e.hp /
-                        e.maxHp
+                    enemy.hp /
+                        enemy.maxHp
                 ),
             5
         );
@@ -1658,6 +1651,91 @@ function drawEnemy(e) {
 
     ctx.restore();
 }
+
+/* =========================
+   DRAW BOSS
+========================= */
+
+function drawBoss(enemy) {
+    ctx.fillStyle =
+        enemy.hit > 0
+            ? "#ff8b91"
+            : "#a92f45";
+
+    ctx.beginPath();
+
+    ctx.arc(
+        0,
+        0,
+        enemy.r,
+        0,
+        Math.PI * 2
+    );
+
+    ctx.fill();
+
+    ctx.strokeStyle =
+        "#ff526b";
+
+    ctx.lineWidth = 4;
+
+    ctx.stroke();
+
+    ctx.fillStyle =
+        "#ffcf55";
+
+    ctx.beginPath();
+
+    ctx.arc(
+        0,
+        -5,
+        15,
+        0,
+        Math.PI * 2
+    );
+
+    ctx.fill();
+
+    ctx.fillStyle = "#151515";
+
+    ctx.fillRect(
+        -18,
+        -28,
+        36,
+        8
+    );
+
+    /*
+     * Boss HP
+     */
+
+    ctx.fillStyle = "#270b10";
+
+    ctx.fillRect(
+        -35,
+        -55,
+        70,
+        7
+    );
+
+    ctx.fillStyle = "#ff425b";
+
+    ctx.fillRect(
+        -35,
+        -55,
+        70 *
+            Math.max(
+                0,
+                enemy.hp /
+                    enemy.maxHp
+            ),
+        7
+    );
+}
+
+/* =========================
+   DRAW PLAYER
+========================= */
 
 function drawPlayer() {
     ctx.save();
@@ -1672,35 +1750,10 @@ function drawPlayer() {
     );
 
     /*
-     * Invulnerability visual.
+     * Armor
      */
-    if (
-        player.invulnerable > 0
-    ) {
-        ctx.strokeStyle =
-            "rgba(255,255,255,.75)";
 
-        ctx.lineWidth = 3;
-
-        ctx.beginPath();
-
-        ctx.arc(
-            0,
-            0,
-            27,
-            0,
-            Math.PI * 2
-        );
-
-        ctx.stroke();
-    }
-
-    /*
-     * Armor ring.
-     */
-    if (
-        player.armor > 0
-    ) {
+    if (player.armor > 0) {
         ctx.strokeStyle =
             "rgba(75,180,255,.85)";
 
@@ -1711,7 +1764,7 @@ function drawPlayer() {
         ctx.arc(
             0,
             0,
-            23,
+            24,
             0,
             Math.PI * 2
         );
@@ -1720,10 +1773,23 @@ function drawPlayer() {
     }
 
     /*
-     * Player body.
+     * Damage protection blink
      */
-    ctx.fillStyle =
-        "#55f5c3";
+
+    if (
+        player.damageCooldown > 0 &&
+        Math.floor(
+            player.damageCooldown * 20
+        ) % 2 === 0
+    ) {
+        ctx.globalAlpha = 0.45;
+    }
+
+    /*
+     * Body
+     */
+
+    ctx.fillStyle = "#55f5c3";
 
     ctx.beginPath();
 
@@ -1737,8 +1803,11 @@ function drawPlayer() {
 
     ctx.fill();
 
-    ctx.fillStyle =
-        "#0b2a20";
+    /*
+     * Helmet
+     */
+
+    ctx.fillStyle = "#0b2a20";
 
     ctx.beginPath();
 
@@ -1754,8 +1823,7 @@ function drawPlayer() {
 
     ctx.fill();
 
-    ctx.fillStyle =
-        "#d9fff3";
+    ctx.fillStyle = "#d9fff3";
 
     ctx.beginPath();
 
@@ -1772,31 +1840,34 @@ function drawPlayer() {
     ctx.fill();
 
     /*
-     * Weapon.
+     * Weapon
      */
+
+    ctx.globalAlpha = 1;
+
     ctx.fillStyle =
-        weapons[
-            weaponIndex
-        ].color;
+        weapons[weaponIndex].color;
 
     ctx.fillRect(
         12,
         -3,
-        25,
+        26,
         6
     );
 
     ctx.restore();
 }
 
+/* =========================
+   HUD
+========================= */
+
 function updateHud() {
     if (hpEl) {
         hpEl.textContent =
             Math.max(
                 0,
-                Math.ceil(
-                    player.hp
-                )
+                Math.ceil(player.hp)
             );
     }
 
@@ -1821,38 +1892,41 @@ function updateHud() {
     }
 
     if (hpFill) {
-        hpFill.style.width =
+        const hpPercent =
             Math.max(
                 0,
                 Math.min(
                     100,
-                    (player.hp /
-                        player.maxHp) *
+                    player.hp /
+                        player.maxHp *
                         100
                 )
-            ) + "%";
+            );
+
+        hpFill.style.width =
+            hpPercent + "%";
 
         hpFill.style.background =
-            player.hp <
-            player.maxHp * 0.25
+            hpPercent < 30
                 ? "#ff554d"
-                : player.hp <
-                  player.maxHp * 0.55
+                : hpPercent < 60
                 ? "#ffd34e"
                 : "#37e879";
     }
 }
+
+/* =========================
+   WEAPON SWITCH
+========================= */
 
 function switchWeapon() {
     weaponIndex =
         (weaponIndex + 1) %
         weapons.length;
 
-    const weapon =
-        weapons[weaponIndex];
-
     showMessage(
-        `🔫 ${weapon.name}`
+        "🔫 " +
+        weapons[weaponIndex].name
     );
 }
 
@@ -1876,87 +1950,377 @@ function heal() {
 
     coins -= 25;
 
-    player.hp =
-        Math.min(
-            player.maxHp,
-            player.hp + 50
-        );
+    player.hp = Math.min(
+        player.maxHp,
+        player.hp + 40
+    );
 
     saveGame();
 
     showMessage(
-        "❤️ +50 HEALTH"
+        "❤️ +40 HEALTH"
     );
 }
 
-function repairArmor() {
-    if (coins < 20) {
-        showMessage(
-            "🪙 NEED 20 COINS"
-        );
-        return;
-    }
+/* =========================
+   GAME LOOP
+========================= */
 
-    if (
-        player.armor >=
-        player.maxArmor
-    ) {
-        showMessage(
-            "🛡️ ARMOR FULL"
-        );
-        return;
-    }
-
-    coins -= 20;
-
-    player.armor =
-        Math.min(
-            player.maxArmor,
-            player.armor + 50
-        );
-
-    saveGame();
-
-    showMessage(
-        "🛡️ +50 ARMOR"
-    );
-}
-
-function loop(t) {
+function loop(time) {
     if (!running) {
         draw();
         return;
     }
 
-    const dt =
-        Math.min(
-            0.033,
-            (t - last) / 1000
-        );
+    const dt = Math.min(
+        0.033,
+        Math.max(
+            0,
+            (time - last) / 1000
+        )
+    );
 
-    last = t;
+    last = time;
 
     update(dt);
     draw();
 
-    requestAnimationFrame(
-        loop
-    );
+    if (running) {
+        requestAnimationFrame(loop);
+    }
 }
 
-/*
- * Buttons.
- */
+/* =========================
+   BUTTONS
+========================= */
+
 const startBtn =
     document.getElementById(
         "startBtn"
     );
 
 if (startBtn) {
-    startBtn.onclick = reset;
+    startBtn.addEventListener(
+        "click",
+        reset
+    );
 }
 
 const restartBtn =
     document.getElementById(
         "restartBtn"
-   
+    );
+
+if (restartBtn) {
+    restartBtn.addEventListener(
+        "click",
+        reset
+    );
+}
+
+const fullscreenBtn =
+    document.getElementById(
+        "fullscreenBtn"
+    );
+
+if (fullscreenBtn) {
+    fullscreenBtn.addEventListener(
+        "click",
+        async () => {
+            try {
+                if (
+                    !document.fullscreenElement
+                ) {
+                    await document.documentElement.requestFullscreen();
+                } else {
+                    await document.exitFullscreen();
+                }
+            } catch (err) {
+                console.log(
+                    "Fullscreen unavailable"
+                );
+            }
+        }
+    );
+}
+
+/* =========================
+   JOYSTICK
+========================= */
+
+function joyPos(event) {
+    if (!joyEl) {
+        return;
+    }
+
+    const rect =
+        joyEl.getBoundingClientRect();
+
+    const centerX =
+        rect.left +
+        rect.width / 2;
+
+    const centerY =
+        rect.top +
+        rect.height / 2;
+
+    let x =
+        event.clientX -
+        centerX;
+
+    let y =
+        event.clientY -
+        centerY;
+
+    const max = 43;
+
+    const distance =
+        Math.hypot(x, y);
+
+    if (distance > max) {
+        x =
+            (x / distance) *
+            max;
+
+        y =
+            (y / distance) *
+            max;
+    }
+
+    joy.x = x / max;
+    joy.y = y / max;
+
+    if (stick) {
+        stick.style.transform =
+            "translate(" +
+            x +
+            "px," +
+            y +
+            "px)";
+    }
+}
+
+function joyEnd() {
+    joy.active = false;
+    joy.id = null;
+
+    joy.x = 0;
+    joy.y = 0;
+
+    if (stick) {
+        stick.style.transform =
+            "translate(0,0)";
+    }
+}
+
+if (joyEl) {
+    joyEl.addEventListener(
+        "pointerdown",
+        event => {
+            joy.active = true;
+            joy.id =
+                event.pointerId;
+
+            joyPos(event);
+
+            try {
+                joyEl.setPointerCapture(
+                    event.pointerId
+                );
+            } catch (err) {}
+        }
+    );
+
+    joyEl.addEventListener(
+        "pointermove",
+        event => {
+            if (
+                joy.active &&
+                event.pointerId === joy.id
+            ) {
+                joyPos(event);
+            }
+        }
+    );
+
+    joyEl.addEventListener(
+        "pointerup",
+        joyEnd
+    );
+
+    joyEl.addEventListener(
+        "pointercancel",
+        joyEnd
+    );
+
+    joyEl.addEventListener(
+        "lostpointercapture",
+        joyEnd
+    );
+}
+
+/* =========================
+   FIRE BUTTON
+========================= */
+
+const fire =
+    document.getElementById(
+        "fire"
+    );
+
+if (fire) {
+    fire.addEventListener(
+        "pointerdown",
+        event => {
+            keys.fire = true;
+
+            shoot();
+
+            try {
+                fire.setPointerCapture(
+                    event.pointerId
+                );
+            } catch (err) {}
+        }
+    );
+
+    fire.addEventListener(
+        "pointerup",
+        () => {
+            keys.fire = false;
+        }
+    );
+
+    fire.addEventListener(
+        "pointercancel",
+        () => {
+            keys.fire = false;
+        }
+    );
+
+    fire.addEventListener(
+        "lostpointercapture",
+        () => {
+            keys.fire = false;
+        }
+    );
+}
+
+/* =========================
+   KEYBOARD
+========================= */
+
+window.addEventListener(
+    "keydown",
+    event => {
+        const key =
+            event.key.toLowerCase();
+
+        if (
+            key === "w" ||
+            event.key === "ArrowUp"
+        ) {
+            keys.up = true;
+        }
+
+        if (
+            key === "s" ||
+            event.key === "ArrowDown"
+        ) {
+            keys.down = true;
+        }
+
+        if (
+            key === "a" ||
+            event.key === "ArrowLeft"
+        ) {
+            keys.left = true;
+        }
+
+        if (
+            key === "d" ||
+            event.key === "ArrowRight"
+        ) {
+            keys.right = true;
+        }
+
+        if (
+            event.code === "Space"
+        ) {
+            keys.fire = true;
+        }
+
+        if (event.key === "1") {
+            weaponIndex = 0;
+            showMessage("🔫 PISTOL");
+        }
+
+        if (event.key === "2") {
+            weaponIndex = 1;
+            showMessage("🔫 RIFLE");
+        }
+
+        if (event.key === "3") {
+            weaponIndex = 2;
+            showMessage("🔫 SHOTGUN");
+        }
+
+        if (key === "q") {
+            switchWeapon();
+        }
+
+        if (key === "h") {
+            heal();
+        }
+    }
+);
+
+window.addEventListener(
+    "keyup",
+    event => {
+        const key =
+            event.key.toLowerCase();
+
+        if (
+            key === "w" ||
+            event.key === "ArrowUp"
+        ) {
+            keys.up = false;
+        }
+
+        if (
+            key === "s" ||
+            event.key === "ArrowDown"
+        ) {
+            keys.down = false;
+        }
+
+        if (
+            key === "a" ||
+            event.key === "ArrowLeft"
+        ) {
+            keys.left = false;
+        }
+
+        if (
+            key === "d" ||
+            event.key === "ArrowRight"
+        ) {
+            keys.right = false;
+        }
+
+        if (
+            event.code === "Space"
+        ) {
+            keys.fire = false;
+        }
+    }
+);
+
+/* =========================
+   STARTUP
+========================= */
+
+loadSave();
+updateHud();
+draw();
